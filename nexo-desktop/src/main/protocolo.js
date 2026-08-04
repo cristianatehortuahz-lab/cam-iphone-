@@ -1,0 +1,144 @@
+'use strict';
+
+// Protocolo binario de Nexo. Funciona igual sobre el tunel USB (usbmux) que
+// sobre una conexion WiFi: es solo un flujo de bytes. Se abandona WebRTC porque
+// necesita ICE/UDP y no encaja en un tunel TCP.
+//
+//   Saludo (una vez, al abrir):
+//     "NEXO1" (5 bytes) | version u8 | longitud u32-BE | JSON de capacidades
+//
+//   Tramas (repetidas):
+//     tipo u8 | longitud u32-BE | carga (longitud bytes)
+//
+//   Tipos de trama:
+//     1 VIDEO    H.264 Annex-B. Los primeros 8 bytes de la carga son la marca
+//                de tiempo (microsegundos, u64-BE); el resto, la unidad NAL.
+//     2 AUDIO    AAC (misma cabecera de tiempo de 8 bytes + datos)
+//     3 ESTADO   JSON: lente, zoom, ISO, bateria, temperatura del movil
+//     4 CONTROL  JSON: ordenes del PC al movil (lente, zoom, foco, linterna...)
+//     5 LATIDO   vacio; mantiene viva la conexion y mide la latencia
+
+const MAGIA = Buffer.from('NEXO1', 'ascii');
+const VERSION = 1;
+
+const TRAMA = { VIDEO: 1, AUDIO: 2, ESTADO: 3, CONTROL: 4, LATIDO: 5 };
+const NOMBRE = { 1: 'video', 2: 'audio', 3: 'estado', 4: 'control', 5: 'latido' };
+
+// --- Codificar --------------------------------------------------------------
+
+function codificarSaludo(capacidades = {}) {
+  const json = Buffer.from(JSON.stringify(capacidades), 'utf8');
+  const cab = Buffer.alloc(MAGIA.length + 1 + 4);
+  MAGIA.copy(cab, 0);
+  cab.writeUInt8(VERSION, MAGIA.length);
+  cab.writeUInt32BE(json.length, MAGIA.length + 1);
+  return Buffer.concat([cab, json]);
+}
+
+function codificarTrama(tipo, carga = Buffer.alloc(0)) {
+  const cab = Buffer.alloc(5);
+  cab.writeUInt8(tipo, 0);
+  cab.writeUInt32BE(carga.length, 1);
+  return Buffer.concat([cab, carga]);
+}
+
+// Media (video/audio) con marca de tiempo en microsegundos por delante.
+function codificarMedia(tipo, microsegundos, datos) {
+  const t = Buffer.alloc(8);
+  t.writeBigUInt64BE(BigInt(microsegundos), 0);
+  return codificarTrama(tipo, Buffer.concat([t, datos]));
+}
+
+function codificarJson(tipo, obj) {
+  return codificarTrama(tipo, Buffer.from(JSON.stringify(obj), 'utf8'));
+}
+
+// --- Analizador de flujo ----------------------------------------------------
+
+// TCP entrega los bytes troceados como quiera, asi que hay que acumular hasta
+// tener una trama completa. Se alimenta con feed() y llama a los callbacks.
+class Analizador {
+  constructor({ onSaludo, onTrama, onError } = {}) {
+    this.buffer = Buffer.alloc(0);
+    this.saludoHecho = false;
+    this.onSaludo = onSaludo || (() => {});
+    this.onTrama = onTrama || (() => {});
+    this.onError = onError || (() => {});
+  }
+
+  feed(trozo) {
+    this.buffer = Buffer.concat([this.buffer, trozo]);
+    // Un solo trozo puede completar varias tramas: se procesan en bucle.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      if (!this.saludoHecho) {
+        if (!this.#leerSaludo()) break;
+      } else if (!this.#leerTrama()) {
+        break;
+      }
+    }
+  }
+
+  #leerSaludo() {
+    const minimo = MAGIA.length + 1 + 4;
+    if (this.buffer.length < minimo) return false;
+
+    if (!this.buffer.slice(0, MAGIA.length).equals(MAGIA)) {
+      this.onError(new Error('Saludo invalido: no es un flujo Nexo'));
+      this.buffer = Buffer.alloc(0);
+      return false;
+    }
+    const version = this.buffer.readUInt8(MAGIA.length);
+    const lonJson = this.buffer.readUInt32BE(MAGIA.length + 1);
+    if (this.buffer.length < minimo + lonJson) return false;
+
+    let capacidades = {};
+    try {
+      capacidades = JSON.parse(this.buffer.slice(minimo, minimo + lonJson).toString('utf8'));
+    } catch {
+      this.onError(new Error('Saludo con JSON invalido'));
+    }
+    this.buffer = this.buffer.slice(minimo + lonJson);
+    this.saludoHecho = true;
+    this.onSaludo({ version, capacidades });
+    return true;
+  }
+
+  #leerTrama() {
+    if (this.buffer.length < 5) return false;
+    const tipo = this.buffer.readUInt8(0);
+    const longitud = this.buffer.readUInt32BE(1);
+    if (this.buffer.length < 5 + longitud) return false;
+
+    const carga = this.buffer.slice(5, 5 + longitud);
+    this.buffer = this.buffer.slice(5 + longitud);
+
+    if (tipo === TRAMA.VIDEO || tipo === TRAMA.AUDIO) {
+      const microsegundos = carga.length >= 8 ? Number(carga.readBigUInt64BE(0)) : 0;
+      this.onTrama({ tipo, nombre: NOMBRE[tipo], microsegundos, datos: carga.slice(8) });
+    } else if (tipo === TRAMA.ESTADO || tipo === TRAMA.CONTROL) {
+      let obj = {};
+      try {
+        obj = JSON.parse(carga.toString('utf8'));
+      } catch {
+        /* trama corrupta: se ignora su contenido */
+      }
+      this.onTrama({ tipo, nombre: NOMBRE[tipo], obj });
+    } else {
+      this.onTrama({ tipo, nombre: NOMBRE[tipo] || 'desconocido', datos: carga });
+    }
+    return true;
+  }
+}
+
+module.exports = {
+  MAGIA,
+  VERSION,
+  TRAMA,
+  NOMBRE,
+  codificarSaludo,
+  codificarTrama,
+  codificarMedia,
+  codificarJson,
+  Analizador,
+};

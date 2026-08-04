@@ -31,7 +31,7 @@ Proyecto en construccion por fases. Cada fase deja algo funcional:
 - [x] **F0** Estructura del repositorio
 - [x] **F1** Identidad visual (logo y todos los iconos, generados desde codigo)
 - [x] **F2** Nexo Desktop (Electron: ventana propia, bandeja, servidor embebido, estudio portado)
-- [ ] **F3** Transporte (usbmux + protocolo Nexo + decodificador)
+- [x] **F3** Transporte (usbmux por cable + protocolo Nexo + decodificador H.264 + Bonjour)
 - [ ] **F4** Nexo Cam (app Swift)
 - [ ] **F5** Compilacion e instalacion (GitHub Actions + Sideloadly)
 - [ ] **F6** Camara virtual y acabado
