@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>Nexo</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100vh;
+        background: linear-gradient(135deg, #12151b, #0b0d10);
+        color: #e6ebf2;
+        font-family: 'Segoe UI', -apple-system, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .caja {
+        max-width: 460px;
+        text-align: center;
+        padding: 32px;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 18px 0 8px;
+      }
+      p {
+        color: #8b97a8;
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      code {
+        background: #1c222a;
+        border: 1px solid #2a323d;
+        border-radius: 6px;
+        padding: 2px 7px;
+        color: #3d9bff;
+        font-family: Consolas, monospace;
+      }
+      .arrastrar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 40px;
+        -webkit-app-region: drag;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="arrastrar"></div>
+    <div class="caja">
+      <h1>El servidor no pudo arrancar</h1>
+      <p>
+        Puede que otra copia de Nexo ya este abierta, o que los puertos
+        <code>8080</code> y <code>8443</code> esten ocupados. Cierra la otra copia
+        y vuelve a abrir Nexo.
+      </p>
+    </div>
+  </body>
+</html>

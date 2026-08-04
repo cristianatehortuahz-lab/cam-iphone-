@@ -1,0 +1,39 @@
+{
+  "name": "nexo-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nexo Desktop — el estudio de camara para Windows",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.nexo.camara",
+    "productName": "Nexo",
+    "directories": {
+      "output": "../dist",
+      "buildResources": "recursos"
+    },
+    "files": [
+      "src/**/*",
+      "recursos/**/*"
+    ],
+    "extraResources": [
+      { "from": "../legado", "to": "legado", "filter": ["**/*", "!node_modules/.cache", "!certs/**"] }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "recursos/icono.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    }
+  }
+}
