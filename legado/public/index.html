@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Camara iPhone - Estudio</title>
+    <link rel="stylesheet" href="/style.css" />
+    <style>
+      body {
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        height: 100vh;
+        overflow: hidden;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 18px;
+        border-bottom: 1px solid var(--borde);
+        background: var(--panel);
+      }
+
+      header h1 {
+        font-size: 15px;
+        font-weight: 600;
+      }
+
+      #estado {
+        font-size: 13px;
+        color: var(--tenue);
+      }
+
+      #enlace {
+        margin-left: auto;
+        font-size: 12px;
+        color: var(--tenue);
+        font-family: ui-monospace, Consolas, monospace;
+      }
+
+      #enlace b {
+        color: var(--acento);
+      }
+
+      #cuerpo {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        min-height: 0;
+      }
+
+      #escena {
+        position: relative;
+        background: #000;
+        overflow: hidden;
+      }
+
+      /* El video es solo la fuente: lo que se ve es el lienzo ya procesado.
+         Si no hubiera WebGL, se marca .sinGl y se muestra el video en crudo. */
+      #video {
+        display: none;
+      }
+
+      #lienzo {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        background: #000;
+        display: block;
+      }
+
+      .sinGl #video {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        background: #000;
+      }
+
+      .sinGl #lienzo {
+        display: none;
+      }
+
+      /* --- Guias de encuadre ------------------------------------------------ */
+
+      #guias {
+        position: absolute;
+        pointer-events: none;
+        inset: 0;
+      }
+
+      #recuadro {
+        position: absolute;
+        border: 2px solid var(--acento);
+        box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+      }
+
+      #recuadro::after {
+        content: attr(data-etiqueta);
+        position: absolute;
+        top: -26px;
+        left: 0;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        color: var(--acento);
+        background: rgba(6, 9, 13, 0.85);
+        padding: 3px 8px;
+        border-radius: 5px;
+      }
+
+      .zonaUi {
+        position: absolute;
+        background: repeating-linear-gradient(
+          45deg,
+          rgba(255, 92, 92, 0.13) 0 8px,
+          transparent 8px 16px
+        );
+        border: 1px dashed rgba(255, 92, 92, 0.45);
+      }
+
+      #rejilla {
+        position: absolute;
+        inset: 0;
+      }
+
+      #rejilla i {
+        position: absolute;
+        background: rgba(255, 255, 255, 0.28);
+      }
+
+      /* --- Superposiciones -------------------------------------------------- */
+
+      #medidor {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        padding: 8px 12px;
+        border-radius: 9px;
+        background: rgba(6, 9, 13, 0.72);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.65;
+        color: var(--tenue);
+        white-space: pre;
+        pointer-events: none;
+      }
+
+      #medidor b {
+        color: var(--texto);
+      }
+
+      #grabando {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 13px;
+        border-radius: 9px;
+        background: rgba(255, 60, 60, 0.16);
+        border: 1px solid var(--error);
+        color: #ffd7d7;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      #grabando .punto {
+        background: var(--error);
+        animation: latir 1s infinite;
+      }
+
+      @keyframes latir {
+        50% {
+          opacity: 0.25;
+        }
+      }
+
+      #espera {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        padding: 40px;
+        text-align: center;
+        overflow: auto;
+      }
+
+      #espera h2 {
+        font-size: 19px;
+        font-weight: 600;
+      }
+
+      #espera ol {
+        text-align: left;
+        color: var(--tenue);
+        font-size: 14px;
+        line-height: 1.9;
+        max-width: 480px;
+        padding-left: 22px;
+      }
+
+      code {
+        background: var(--panel-alto);
+        border: 1px solid var(--borde);
+        border-radius: 6px;
+        padding: 2px 7px;
+        font-family: ui-monospace, Consolas, monospace;
+        font-size: 13px;
+        color: var(--acento);
+      }
+
+      /* --- Panel lateral ---------------------------------------------------- */
+
+      #panel {
+        width: 268px;
+        background: var(--panel);
+        border-left: 1px solid var(--borde);
+        padding: 16px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      #panel.plegado {
+        display: none;
+      }
+
+      .grupo {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+      }
+
+      .grupo > h3 {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--tenue);
+        font-weight: 600;
+      }
+
+      .grupo label {
+        font-size: 12px;
+        color: var(--tenue);
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .grupo label span {
+        color: var(--texto);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .grupo select,
+      .grupo button {
+        width: 100%;
+        padding: 9px 12px;
+        font-size: 14px;
+        background-position: calc(100% - 17px) 18px, calc(100% - 12px) 18px;
+      }
+
+      .pareja {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      input[type='range'] {
+        width: 100%;
+        -webkit-appearance: none;
+        appearance: none;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--borde);
+        outline: none;
+      }
+
+      input[type='range']::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: var(--acento);
+        cursor: pointer;
+      }
+
+      #deslizadores {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+      }
+
+      .deslizador label {
+        font-size: 12px;
+        color: var(--tenue);
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 1px;
+      }
+
+      .deslizador label span {
+        color: var(--texto);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .deslizador.tocado label {
+        color: var(--acento);
+      }
+
+      .aviso {
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--tenue);
+        background: var(--panel-alto);
+        border: 1px solid var(--borde);
+        border-radius: 8px;
+        padding: 10px 12px;
+      }
+
+      /* --- Pie -------------------------------------------------------------- */
+
+      footer {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 11px 18px;
+        border-top: 1px solid var(--borde);
+        background: var(--panel);
+      }
+
+      footer .sep {
+        width: 1px;
+        height: 24px;
+        background: var(--borde);
+      }
+
+      footer button,
+      footer select {
+        padding: 8px 13px;
+        font-size: 14px;
+      }
+
+      footer select {
+        background-position: calc(100% - 17px) 17px, calc(100% - 12px) 17px;
+      }
+
+      .empujar {
+        margin-left: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="punto" id="luz"></span>
+      <h1>Camara iPhone · Estudio</h1>
+      <span id="estado">Esperando al iPhone…</span>
+      <span id="enlace"></span>
+    </header>
+
+    <div id="cuerpo">
+      <div id="escena">
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="lienzo"></canvas>
+
+        <div id="guias" class="oculto">
+          <div id="recuadro" data-etiqueta=""></div>
+          <div id="rejilla" class="oculto"></div>
+        </div>
+
+        <div id="medidor" class="oculto"></div>
+        <div id="grabando" class="oculto">
+          <span class="punto"></span><span id="crono">0:00</span>
+        </div>
+
+        <div id="espera">
+          <h2>Conecta el iPhone por el cable</h2>
+          <ol>
+            <li>Conecta el iPhone al PC con el cable USB-C.</li>
+            <li>En el iPhone: <b>Ajustes › Compartir Internet › Permitir a otros</b>.</li>
+            <li>Si Windows pregunta, elige <b>red privada</b>; en el iPhone pulsa <b>Confiar</b>.</li>
+            <li>Abre Safari en el iPhone y entra en <code id="direccion">…</code></li>
+            <li>Pulsa <b>Empezar</b> y autoriza la camara.</li>
+          </ol>
+        </div>
+      </div>
+
+      <aside id="panel">
+        <div class="grupo">
+          <h3>Camara</h3>
+          <select id="lente" disabled>
+            <option>Lente</option>
+          </select>
+          <div class="pareja">
+            <select id="resolucion" disabled>
+              <option value="1280x720">720p</option>
+              <option value="1920x1080" selected>1080p</option>
+              <option value="2560x1440">1440p</option>
+              <option value="3840x2160">4K</option>
+            </select>
+            <select id="fps" disabled>
+              <option value="24">24 fps</option>
+              <option value="30" selected>30 fps</option>
+              <option value="60">60 fps</option>
+            </select>
+          </div>
+          <select id="hint" disabled>
+            <option value="motion">Prioridad: fluidez</option>
+            <option value="detail">Prioridad: nitidez</option>
+          </select>
+        </div>
+
+        <div class="grupo oculto" id="grupoZoom">
+          <h3>Zoom optico / digital</h3>
+          <label>Zoom <span id="valorZoom">1,0x</span></label>
+          <input type="range" id="zoom" min="1" max="5" step="0.1" value="1" />
+        </div>
+
+        <div class="grupo oculto" id="grupoExposicion">
+          <h3>Exposicion</h3>
+          <label>Compensacion <span id="valorExposicion">0</span></label>
+          <input type="range" id="exposicion" min="-3" max="3" step="0.25" value="0" />
+        </div>
+
+        <div class="grupo oculto" id="grupoEnfoque">
+          <h3>Enfoque y color</h3>
+          <select id="enfoque"></select>
+          <select id="balance"></select>
+        </div>
+
+        <div class="grupo">
+          <h3>Correccion de imagen</h3>
+          <select id="preset">
+            <option value="neutro">Look: neutro</option>
+            <option value="retrato">Look: retrato</option>
+            <option value="vivido">Look: vivido</option>
+            <option value="calido">Look: calido</option>
+            <option value="frio">Look: frio</option>
+            <option value="suave">Look: suave</option>
+            <option value="cine">Look: cine</option>
+            <option value="nocturno">Look: poca luz</option>
+            <option value="byn">Look: blanco y negro</option>
+          </select>
+          <div id="deslizadores"></div>
+          <div class="pareja">
+            <button id="compararImagen">Comparar</button>
+            <button id="reiniciarImagen">Restablecer</button>
+          </div>
+        </div>
+
+        <div class="grupo">
+          <h3>Encuadre</h3>
+          <select id="formato">
+            <option value="libre">Sin guia</option>
+            <option value="9:16">9:16 · TikTok / Reels / Shorts</option>
+            <option value="4:5">4:5 · Feed Instagram</option>
+            <option value="1:1">1:1 · Cuadrado</option>
+            <option value="16:9">16:9 · YouTube</option>
+          </select>
+          <div class="pareja">
+            <button id="rejillaBtn">Rejilla</button>
+            <button id="zonasBtn">Zona UI</button>
+          </div>
+        </div>
+
+        <div class="grupo">
+          <h3>Salida a OBS</h3>
+          <div class="aviso">
+            Para usarla en TikTok Live Studio, YouTube o Zoom, anade en OBS una
+            <b>Fuente de navegador</b> con esta direccion y activa la
+            <b>Camara virtual</b>.
+          </div>
+          <button id="copiarObs">Copiar direccion OBS</button>
+          <button id="abrirObs">Ver salida limpia</button>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <button id="linterna" disabled>Linterna</button>
+      <button id="espejo">Reflejar</button>
+      <select id="rotar">
+        <option value="0">Sin girar</option>
+        <option value="90">Girar 90°</option>
+        <option value="180">Girar 180°</option>
+        <option value="270">Girar 270°</option>
+      </select>
+
+      <div class="sep"></div>
+
+      <button id="datos">Datos</button>
+      <button id="foto" disabled>Captura</button>
+      <button id="grabar" disabled>Grabar</button>
+
+      <div class="sep"></div>
+
+      <button id="ocultarPanel">Ocultar panel</button>
+      <button id="pantalla" class="empujar principal" disabled>Pantalla completa</button>
+    </footer>
+
+    <script src="/procesador.js"></script>
+    <script src="/viewer.js"></script>
+  </body>
+</html>

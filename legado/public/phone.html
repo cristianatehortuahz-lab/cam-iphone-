@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#0b0d10" />
+    <title>Camara iPhone</title>
+    <link rel="stylesheet" href="/style.css" />
+    <style>
+      body {
+        display: flex;
+        flex-direction: column;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+          env(safe-area-inset-left);
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--borde);
+      }
+
+      header h1 {
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      #estado {
+        margin-left: auto;
+        font-size: 13px;
+        color: var(--tenue);
+      }
+
+      #marco {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        background: #000;
+      }
+
+      #previa {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        background: #000;
+      }
+
+      #previa.espejo {
+        transform: scaleX(-1);
+      }
+
+      #cartel {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        padding: 28px;
+        text-align: center;
+        color: var(--tenue);
+        font-size: 15px;
+        line-height: 1.5;
+      }
+
+      #panel {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 16px 18px calc(18px + env(safe-area-inset-bottom));
+        background: var(--panel);
+        border-top: 1px solid var(--borde);
+      }
+
+      .campo {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .campo label {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--tenue);
+      }
+
+      .fila {
+        display: flex;
+        gap: 10px;
+      }
+
+      .fila > * {
+        flex: 1;
+      }
+
+      #info {
+        font-size: 12px;
+        color: var(--tenue);
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="punto" id="luz"></span>
+      <h1>Camara iPhone</h1>
+      <span id="estado">Sin conectar</span>
+    </header>
+
+    <div id="marco">
+      <video id="previa" playsinline autoplay muted></video>
+      <div id="cartel">
+        <strong style="color: var(--texto); font-size: 17px">Listo para transmitir</strong>
+        <span
+          >Pulsa <b>Empezar</b> y autoriza el acceso a la camara.<br />La imagen se vera en la
+          pantalla del PC.</span
+        >
+      </div>
+    </div>
+
+    <div id="panel">
+      <div class="campo">
+        <label for="lente">Lente</label>
+        <select id="lente" disabled>
+          <option>Pulsa Empezar para ver las lentes</option>
+        </select>
+      </div>
+
+      <div class="fila">
+        <div class="campo">
+          <label for="resolucion">Resolucion</label>
+          <select id="resolucion">
+            <option value="1280x720">720p</option>
+            <option value="1920x1080" selected>1080p</option>
+            <option value="2560x1440">1440p</option>
+            <option value="3840x2160">4K</option>
+          </select>
+        </div>
+        <div class="campo">
+          <label for="fps">Fotogramas</label>
+          <select id="fps">
+            <option value="24">24 fps · cine</option>
+            <option value="30" selected>30 fps</option>
+            <option value="60">60 fps · fluido</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="fila">
+        <button id="empezar" class="principal">Empezar</button>
+        <button id="parar" class="peligro" disabled>Parar</button>
+      </div>
+
+      <div class="fila">
+        <button id="micro">Microfono: no</button>
+        <button id="linterna" disabled>Linterna</button>
+      </div>
+
+      <div id="info">Esperando…</div>
+    </div>
+
+    <script src="/phone.js"></script>
+  </body>
+</html>

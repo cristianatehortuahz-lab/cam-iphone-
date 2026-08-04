@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>Salida limpia</title>
+    <style>
+      /* Sin interfaz: esta pagina es solo la imagen ya corregida, para que OBS
+         la capture tal cual. */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+      }
+
+      video {
+        display: none;
+      }
+
+      canvas {
+        width: 100vw;
+        height: 100vh;
+        display: block;
+        object-fit: cover;
+      }
+
+      canvas.contener {
+        object-fit: contain;
+      }
+
+      /* Si no hubiera WebGL, se muestra el video en crudo antes que nada. */
+      body.sinGl video {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        object-fit: cover;
+      }
+
+      body.sinGl canvas {
+        display: none;
+      }
+
+      #aviso {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: -apple-system, 'Segoe UI', sans-serif;
+        font-size: 15px;
+        color: #7c8898;
+        background: #0b0d10;
+      }
+
+      #aviso.oculto {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <video id="video" autoplay playsinline muted></video>
+    <div id="aviso">Esperando la camara del iPhone…</div>
+
+    <script src="/procesador.js"></script>
+    <script>
+      'use strict';
+
+      const params = new URLSearchParams(location.search);
+      const video = document.getElementById('video');
+      const aviso = document.getElementById('aviso');
+
+      // OBS controla el audio con "Controlar audio mediante OBS". Por defecto
+      // silenciamos para que no se cuele por los altavoces del PC.
+      video.muted = params.get('audio') !== '1';
+
+      const procesador = new ProcesadorImagen(video);
+      const lienzo = procesador.canvas;
+      if (params.get('ajuste') === 'contener') lienzo.classList.add('contener');
+      document.body.appendChild(lienzo);
+      if (!procesador.disponible) document.body.classList.add('sinGl');
+
+      // Estos dos se pueden fijar por URL; si el estudio manda ajustes, mandan
+      // los del estudio, que es donde se esta encuadrando de verdad.
+      if (params.get('rotar')) procesador.aplicar({ rotacion: Number(params.get('rotar')) });
+      if (params.get('espejo') === '1') procesador.aplicar({ espejo: true });
+
+      // ?formato=9:16 recorta la salida a esa proporcion, centrada. El lienzo
+      // pasa a tener ya las dimensiones finales, asi que OBS recibe el encuadre
+      // hecho en vez de tener que recortarlo con una transformacion.
+      const formato = params.get('formato');
+      if (formato && formato.includes(':')) {
+        const [a, b] = formato.split(':').map(Number);
+        if (a > 0 && b > 0) procesador.recorte = a / b;
+      }
+
+      let ws = null;
+      let pc = null;
+      let reconectar = null;
+
+      function enviar(m) {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
+      }
+
+      function cerrar() {
+        procesador.parar();
+        if (pc) {
+          pc.ontrack = pc.onicecandidate = null;
+          pc.close();
+          pc = null;
+        }
+        video.srcObject = null;
+        aviso.classList.remove('oculto');
+      }
+
+      async function atenderOferta(msg) {
+        cerrar();
+        pc = new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle' });
+
+        pc.ontrack = (e) => {
+          video.srcObject = e.streams[0];
+          aviso.classList.add('oculto');
+          video.play().finally(() => procesador.iniciar());
+        };
+        pc.onicecandidate = (e) => {
+          if (e.candidate) enviar({ tipo: 'ice', para: msg.de, candidato: e.candidate });
+        };
+
+        await pc.setRemoteDescription(msg.sdp);
+        await pc.setLocalDescription(await pc.createAnswer());
+        enviar({ tipo: 'respuesta', para: msg.de, sdp: pc.localDescription });
+      }
+
+      function conectar() {
+        ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+
+        ws.onopen = () => {
+          clearTimeout(reconectar);
+          enviar({ tipo: 'hola', rol: 'visor' });
+        };
+        ws.onclose = () => {
+          cerrar();
+          reconectar = setTimeout(conectar, 1500);
+        };
+        ws.onerror = () => ws.close();
+        ws.onmessage = async (evento) => {
+          const msg = JSON.parse(evento.data);
+          if (msg.tipo === 'oferta') {
+            await atenderOferta(msg);
+          } else if (msg.tipo === 'ice' && pc && msg.candidato) {
+            try {
+              await pc.addIceCandidate(msg.candidato);
+            } catch {
+              /* candidato tardio */
+            }
+          } else if (msg.tipo === 'imagen' && msg.valores) {
+            // Correccion en vivo: lo que tocas en el estudio se ve aqui al
+            // instante, sin recargar la fuente de OBS.
+            procesador.aplicar(msg.valores);
+          } else if (msg.tipo === 'movil-desconectado') {
+            cerrar();
+          }
+        };
+      }
+
+      conectar();
+    </script>
+  </body>
+</html>

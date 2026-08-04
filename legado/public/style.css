@@ -1,0 +1,117 @@
+:root {
+  --fondo: #0b0d10;
+  --panel: #14181e;
+  --panel-alto: #1c222a;
+  --borde: #2a323d;
+  --texto: #e6ebf2;
+  --tenue: #8b97a8;
+  --acento: #3d9bff;
+  --ok: #34d17a;
+  --aviso: #ffb020;
+  --error: #ff5c5c;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+button,
+select {
+  font-family: inherit;
+  font-size: 15px;
+  color: var(--texto);
+  background: var(--panel-alto);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+button:hover:not(:disabled),
+select:hover:not(:disabled) {
+  background: #252d38;
+  border-color: #3a4552;
+}
+
+button:disabled,
+select:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+button.principal {
+  background: var(--acento);
+  border-color: var(--acento);
+  color: #04121f;
+  font-weight: 600;
+}
+
+button.principal:hover:not(:disabled) {
+  background: #58a9ff;
+  border-color: #58a9ff;
+}
+
+button.peligro {
+  background: transparent;
+  border-color: var(--error);
+  color: var(--error);
+}
+
+button.activo {
+  background: var(--acento);
+  border-color: var(--acento);
+  color: #04121f;
+}
+
+select {
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--tenue) 50%),
+    linear-gradient(135deg, var(--tenue) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 19px, calc(100% - 13px) 19px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 36px;
+}
+
+.punto {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tenue);
+  flex: none;
+}
+
+.punto.ok {
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+}
+
+.punto.aviso {
+  background: var(--aviso);
+}
+
+.punto.error {
+  background: var(--error);
+}
+
+.oculto {
+  display: none !important;
+}

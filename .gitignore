@@ -1,0 +1,37 @@
+# --- SECRETOS: nunca deben subir a un repo publico ---
+# La CA raiz lleva clave privada, y clave.txt es la clave de acceso.
+certs/
+**/certs/
+*.key
+*.pem
+clave.txt
+
+# --- Dependencias ---
+node_modules/
+**/node_modules/
+
+# --- Artefactos de compilacion ---
+dist/
+build/
+out/
+*.exe
+*.ipa
+*.app/
+*.dmg
+DerivedData/
+*.xcarchive
+
+# --- Ajustes locales del usuario ---
+ajustes.json
+config.local.json
+*.local.json
+
+# --- Sistema ---
+.DS_Store
+Thumbs.db
+*.log
+
+# --- Editor ---
+.vscode/
+.idea/
+*.swp

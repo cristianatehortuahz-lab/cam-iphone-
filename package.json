@@ -1,0 +1,17 @@
+{
+  "name": "nexo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nexo — convierte tu iPhone en la camara profesional de tu PC, por cable USB-C",
+  "workspaces": [
+    "nexo-desktop"
+  ],
+  "scripts": {
+    "iconos": "node recursos/generar-iconos.js",
+    "legado": "npm --prefix legado start"
+  },
+  "devDependencies": {
+    "png-to-ico": "^2.1.8",
+    "sharp": "^0.33.5"
+  }
+}

@@ -1,0 +1,11 @@
+# Normaliza los finales de linea: LF en el repo, lo que toque en cada sistema.
+* text=auto
+
+# Binarios: nunca tocar.
+*.png binary
+*.ico binary
+*.ipa binary
+*.icns binary
+
+# Los scripts de Windows van con CRLF.
+*.bat text eol=crlf
