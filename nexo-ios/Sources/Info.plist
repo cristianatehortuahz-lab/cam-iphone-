@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>Nexo</string>
+  <key>CFBundleDisplayName</key>
+  <string>Nexo</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>UILaunchScreen</key>
+  <dict>
+    <key>UIColorName</key>
+    <string></string>
+  </dict>
+
+  <!-- Permisos: por que la app usa cada cosa (obligatorio o iOS la rechaza) -->
+  <key>NSCameraUsageDescription</key>
+  <string>Nexo usa la camara para transmitir la imagen a tu PC como webcam.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Nexo usa el microfono para enviar el audio junto con el video.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Nexo se conecta a tu PC por la red local para transmitir el video por WiFi.</string>
+
+  <!-- Servicios Bonjour que la app anuncia o busca -->
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_nexo._tcp</string>
+  </array>
+
+  <!-- Orientaciones: vertical y horizontal, como una camara -->
+  <key>UISupportedInterfaceOrientations</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+
+  <!-- Seguir capturando y transmitiendo con la pantalla activa -->
+  <key>UIBackgroundModes</key>
+  <array>
+    <string>audio</string>
+  </array>
+</dict>
+</plist>

@@ -1,0 +1,59 @@
+name: Compilar Nexo Cam (iOS)
+
+# Compila la app de iPhone en los runners macOS de GitHub (gratis e ilimitado en
+# repos publicos). Produce un .ipa SIN FIRMAR que se instala en el iPhone con
+# Sideloadly, firmando con tu Apple ID en el momento de instalar.
+#
+# Se ejecuta al tocar nexo-ios/, o a mano desde la pestana Actions.
+
+on:
+  push:
+    paths:
+      - 'nexo-ios/**'
+      - '.github/workflows/ios.yml'
+  workflow_dispatch:
+
+jobs:
+  compilar:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar XcodeGen
+        run: brew install xcodegen
+
+      - name: Generar el proyecto Xcode
+        working-directory: nexo-ios
+        run: xcodegen generate
+
+      - name: Compilar (sin firma)
+        working-directory: nexo-ios
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Nexo.xcodeproj \
+            -scheme Nexo \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build | xcbeautify || xcodebuild -project Nexo.xcodeproj -scheme Nexo -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+
+      - name: Empaquetar .ipa sin firmar
+        working-directory: nexo-ios
+        run: |
+          APP="build/Build/Products/Release-iphoneos/Nexo.app"
+          if [ ! -d "$APP" ]; then echo "No se genero Nexo.app"; exit 1; fi
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -r Nexo-sin-firmar.ipa Payload >/dev/null
+          echo "IPA creado: $(du -h Nexo-sin-firmar.ipa | cut -f1)"
+
+      - name: Subir el .ipa como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexo-sin-firmar-ipa
+          path: nexo-ios/Nexo-sin-firmar.ipa
+          if-no-files-found: error

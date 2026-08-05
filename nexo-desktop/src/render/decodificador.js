@@ -26,7 +26,7 @@ class DecodificadorVideo {
   static async comprobarH264() {
     if (!DecodificadorVideo.soportado()) return { soportado: false, motivo: 'WebCodecs no disponible' };
     try {
-      const r = await VideoDecoder.isConfigSupported({ codec: 'avc1.42E01F', optimizeForLatency: true });
+      const r = await VideoDecoder.isConfigSupported({ codec: 'avc1.640034', optimizeForLatency: true });
       return { soportado: Boolean(r.supported), config: r.config || null };
     } catch (e) {
       return { soportado: false, motivo: e.message };
@@ -52,7 +52,7 @@ class DecodificadorVideo {
     // que es justo como las emite VideoToolbox en el iPhone. optimizeForLatency
     // reduce el buffer interno: importa para un directo.
     this.decoder.configure({
-      codec: 'avc1.42E01F',
+      codec: 'avc1.640034',
       optimizeForLatency: true,
       hardwareAcceleration: 'prefer-hardware',
       ...(ancho && alto ? { codedWidth: ancho, codedHeight: alto } : {}),
