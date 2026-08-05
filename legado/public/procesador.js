@@ -147,6 +147,7 @@ void main() {
 class ProcesadorImagen {
   constructor(video) {
     this.video = video;
+    this.frameExterno = null; // VideoFrame que puede sustituir a this.video
     this.ajustes = { ...AJUSTES_NEUTROS };
     // Proporcion de salida (por ejemplo 9/16). Con null se entrega el fotograma
     // completo. Recortar aqui, y no en CSS, hace que el lienzo tenga ya las
@@ -268,22 +269,39 @@ class ProcesadorImagen {
     if (!this.activo) return;
     this.dibujar();
     // requestVideoFrameCallback dibuja una vez por fotograma real del video, sin
-    // repetir trabajo cuando la pantalla va mas rapida que la camara.
-    if (this.video.requestVideoFrameCallback) {
+    // repetir trabajo cuando la pantalla va mas rapida que la camara. En la
+    // ruta nativa (VideoFrame externo) usamos requestAnimationFrame: cada nuevo
+    // frame llega por ponerFrameExterno y se dibuja aqui.
+    if (!this.frameExterno && this.video.requestVideoFrameCallback) {
       this.video.requestVideoFrameCallback(() => this.#bucle());
     } else {
       this.pendiente = requestAnimationFrame(() => this.#bucle());
     }
   }
 
+  // Cuando llega vídeo por la ruta nativa (Nexo Cam), el orquestador entrega
+  // VideoFrame decodificados. Se usan como fuente en el próximo dibujo y luego
+  // se liberan (los VideoFrame consumen memoria de GPU y hay que cerrarlos).
+  ponerFrameExterno(vf) {
+    if (this.frameExterno) this.frameExterno.close();
+    this.frameExterno = vf;
+  }
+
   dibujar() {
     const gl = this.gl;
     const v = this.video;
-    if (!gl || !this.programa || !v.videoWidth || v.readyState < 2) return;
+    const vf = this.frameExterno;
+
+    // Fuente: preferimos el VideoFrame externo si hay; si no, el <video>.
+    const fuente = vf || v;
+    const anchoFuente = vf ? vf.displayWidth : v.videoWidth;
+    const altoFuente = vf ? vf.displayHeight : v.videoHeight;
+    const listo = vf || (v.videoWidth && v.readyState >= 2);
+    if (!gl || !this.programa || !listo) return;
 
     const girado = this.ajustes.rotacion === 90 || this.ajustes.rotacion === 270;
-    let ancho = girado ? v.videoHeight : v.videoWidth;
-    let alto = girado ? v.videoWidth : v.videoHeight;
+    let ancho = girado ? altoFuente : anchoFuente;
+    let alto = girado ? anchoFuente : altoFuente;
 
     // Recorte centrado a la proporcion pedida. Las fracciones se calculan en el
     // espacio de salida y se pasan al de la fuente, que estan intercambiados
@@ -312,9 +330,15 @@ class ProcesadorImagen {
     gl.bindTexture(gl.TEXTURE_2D, this.textura);
 
     try {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, v);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, fuente);
     } catch {
       return; // fotograma aun no disponible
+    }
+
+    // Los VideoFrame son de un solo uso: se cierran despues de subirlos.
+    if (vf) {
+      vf.close();
+      this.frameExterno = null;
     }
 
     const a = this.ajustes;
@@ -323,7 +347,7 @@ class ProcesadorImagen {
     const sen = Math.sin(rad);
 
     gl.uniform1i(this.u.u_tex, 0);
-    gl.uniform2f(this.u.u_texel, 1 / v.videoWidth, 1 / v.videoHeight);
+    gl.uniform2f(this.u.u_texel, 1 / anchoFuente, 1 / altoFuente);
     gl.uniformMatrix2fv(this.u.u_giro, false, [cos, sen, -sen, cos]);
     gl.uniform2f(this.u.u_escala, escala[0], escala[1]);
     gl.uniform1f(this.u.u_espejo, a.espejo ? -1 : 1);

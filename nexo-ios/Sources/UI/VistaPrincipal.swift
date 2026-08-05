@@ -112,7 +112,7 @@ struct VistaPrincipal: View {
 
     private func pedirPermisos() async {
         let camara = await AVCaptureDevice.requestAccess(for: .video)
-        _ = await AVCaptureDevice.requestAccess(for: .audio)
+        // Sin audio de momento; se anadira cuando se implemente la captura.
         await MainActor.run {
             permisoConcedido = camara
             if camara {

@@ -51,10 +51,10 @@ class Sesion extends EventEmitter {
   #trama(t) {
     switch (t.nombre) {
       case 'video':
-        this.emit('video', { microsegundos: t.microsegundos, datos: t.datos });
+        this.emit('video', { microsegundos: t.microsegundos, clave: t.clave, datos: t.datos });
         break;
       case 'audio':
-        this.emit('audio', { microsegundos: t.microsegundos, datos: t.datos });
+        this.emit('audio', { microsegundos: t.microsegundos, clave: t.clave, datos: t.datos });
         break;
       case 'estado':
         this.emit('estado', t.obj);

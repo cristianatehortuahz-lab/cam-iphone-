@@ -5,7 +5,7 @@ import Foundation
 //
 //   Saludo:  "NEXO1"(5) | version u8 | longitud u32-BE | JSON de capacidades
 //   Trama:   tipo u8 | longitud u32-BE | carga
-//   Media:   la carga empieza por la marca de tiempo u64-BE (microsegundos)
+//   Media:   u64-BE tiempo (us) | u8 flags (bit 0 = clave) | datos
 //
 //   Tipos:   1 VIDEO  2 AUDIO  3 ESTADO  4 CONTROL  5 LATIDO
 
@@ -53,9 +53,13 @@ enum ProtocoloNexo {
         return d
     }
 
-    // Video/audio: marca de tiempo (microsegundos) por delante de los datos.
-    static func codificarMedia(_ tipo: TipoTrama, microsegundos: UInt64, datos: Data) -> Data {
+    // Video/audio: marca de tiempo + byte de flags + datos. Bit 0 de flags =
+    // fotograma clave (imprescindible: sin el, el decodificador del PC se
+    // queda esperando la primera IDR y no se ve nada).
+    static func codificarMedia(_ tipo: TipoTrama, microsegundos: UInt64,
+                               clave: Bool = false, datos: Data) -> Data {
         var carga = u64BE(microsegundos)
+        carga.append(clave ? 1 : 0)
         carga.append(datos)
         return codificarTrama(tipo, carga)
     }

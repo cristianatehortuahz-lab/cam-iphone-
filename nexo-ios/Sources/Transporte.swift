@@ -67,7 +67,8 @@ final class SesionNexo {
     // --- Envio (llamado desde el pipeline de video) -------------------------
 
     func enviarVideo(_ datos: Data, microsegundos: UInt64, esClave: Bool) {
-        enviar(ProtocoloNexo.codificarMedia(.video, microsegundos: microsegundos, datos: datos))
+        enviar(ProtocoloNexo.codificarMedia(.video, microsegundos: microsegundos,
+                                            clave: esClave, datos: datos))
     }
 
     func enviarAudio(_ datos: Data, microsegundos: UInt64) {
@@ -111,17 +112,46 @@ final class ServidorCable {
         do {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
+            // Escucha SOLO en loopback (127.0.0.1). Por el cable, usbmux entrega
+            // las conexiones del PC como locales; por WiFi el iPhone se conecta
+            // saliente, asi que este listener no hace falta que sea accesible
+            // desde la red. Cerrar la red aqui elimina un agujero de privacidad
+            // sin exigir claves ni configuracion al usuario.
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(
+                host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: PUERTO_CABLE)!
+            )
             listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: PUERTO_CABLE)!)
             listener?.newConnectionHandler = { [weak self] conexion in
                 guard let self = self else { return }
+                // Defensa en profundidad: aunque el bind sea a loopback, se
+                // rechaza cualquier conexion cuyo extremo remoto no sea local.
+                if !ServidorCable.esLocal(conexion.endpoint) {
+                    NSLog("Nexo: conexion rechazada de %@ (no local)", "\(conexion.endpoint)")
+                    conexion.cancel()
+                    return
+                }
                 let ses = SesionNexo(conexion, capacidades: self.capacidades)
                 self.alSesion?(ses)
                 ses.iniciar()
             }
             listener?.start(queue: .global())
-            NSLog("Nexo: escuchando por cable en el puerto %d", PUERTO_CABLE)
+            NSLog("Nexo: escuchando por cable (loopback) en el puerto %d", PUERTO_CABLE)
         } catch {
             NSLog("Nexo: no se pudo abrir el puerto de cable: %@", error.localizedDescription)
+        }
+    }
+
+    private static func esLocal(_ ep: NWEndpoint) -> Bool {
+        switch ep {
+        case .hostPort(let host, _):
+            switch host {
+            case .ipv4(let a): return a == .loopback || "\(a)" == "127.0.0.1"
+            case .ipv6(let a): return a == .loopback || "\(a)".hasPrefix("::1")
+            case .name(let n, _): return n == "localhost"
+            @unknown default: return false
+            }
+        default:
+            return false
         }
     }
 

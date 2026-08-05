@@ -58,6 +58,10 @@ let comparando = false;
 let firmaLentes = '';
 
 const procesador = new ProcesadorImagen(elVideo);
+// El puente Nexo Desktop -> Electron necesita alcanzar el procesador para
+// entregarle VideoFrame decodificados (ver puente.js). En navegador plano,
+// asignarlo a window es inofensivo.
+window.procesador = procesador;
 elLienzo.replaceWith(procesador.canvas);
 procesador.canvas.id = 'lienzo';
 const elSalida = procesador.canvas;

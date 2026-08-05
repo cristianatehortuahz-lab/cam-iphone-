@@ -34,6 +34,7 @@ Proyecto en construccion por fases. Cada fase deja algo funcional:
 - [x] **F3** Transporte (usbmux por cable + protocolo Nexo + decodificador H.264 + Bonjour)
 - [x] **F4** Nexo Cam (app Swift: camara, codificador H.264, transporte, interfaz) — **compila en la nube**
 - [x] **F5** Compilacion e instalacion (GitHub Actions produce el .ipa; guia de Sideloadly en INSTALAR-IPHONE.md)
+- [x] **F3.5** Integracion (transporte cableado + puente al motor de color + protocolo con flag de clave + iPhone solo loopback)
 - [ ] **F6** Camara virtual (integrar OBS) y acabado
 
 La app de iPhone ya **compila** en macOS via GitHub Actions y genera un `.ipa`

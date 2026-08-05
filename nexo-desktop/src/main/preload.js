@@ -9,4 +9,11 @@ contextBridge.exposeInMainWorld('nexo', {
   // Estado del servidor embebido: puertos, direccion del iPhone, si hay cable.
   estado: () => ipcRenderer.invoke('nexo:estado'),
   version: process.versions.electron,
+
+  // Conexion nativa con Nexo Cam (F3.5).
+  // Los buffers de video llegan como { microsegundos, clave, datos } donde
+  // datos es un Buffer (Electron lo convierte a Uint8Array-compatible via IPC).
+  onVideo: (cb) => ipcRenderer.on('nexo:video', (_ev, v) => cb(v)),
+  onConexion: (cb) => ipcRenderer.on('nexo:conexion', (_ev, c) => cb(c)),
+  enviarControl: (orden) => ipcRenderer.send('nexo:control', orden),
 });

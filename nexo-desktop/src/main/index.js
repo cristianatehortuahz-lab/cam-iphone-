@@ -3,6 +3,7 @@
 const { app, BrowserWindow, Tray, Menu, shell, ipcMain, nativeImage } = require('electron');
 const path = require('path');
 const { Ajustes } = require('./ajustes');
+const { Conexion } = require('./conexion');
 
 // El servidor legado (auditado) corre embebido dentro de la app: da la senal
 // WebRTC y recibe al iPhone mientras no exista el transporte nativo (F3). En
@@ -18,6 +19,7 @@ const RECURSOS = path.join(__dirname, '..', '..', 'recursos');
 let ventana = null;
 let bandeja = null;
 let servidor = null; // referencia devuelta por legado.iniciar()
+let conexion = null; // orquestador de Nexo Cam (usbmux + WiFi)
 let ajustes = null;
 let saliendoDeVerdad = false;
 
@@ -34,6 +36,7 @@ async function arrancar() {
   ajustes = new Ajustes(app.getPath('userData'));
 
   await iniciarServidor();
+  await iniciarConexionNativa();
   crearVentana();
   crearBandeja();
   aplicarArranqueConWindows();
@@ -55,6 +58,35 @@ async function iniciarServidor() {
     // no tiene sentido cerrar toda la app por esto.
     console.error('[nexo] no se pudo iniciar el servidor:', err.mensajeUsuario || err.message);
     servidor = null;
+  }
+}
+
+// --- Conexion nativa con Nexo Cam ------------------------------------------
+
+async function iniciarConexionNativa() {
+  conexion = new Conexion({
+    // Cada fotograma llega ya con u64 tiempo, u8 flags (clave) y las NAL.
+    // Se reenvia al renderer, que lo mete en el decodificador WebCodecs.
+    ipcVideo: (v) => {
+      if (ventana && !ventana.isDestroyed()) {
+        ventana.webContents.send('nexo:video', v);
+      }
+    },
+  });
+  conexion.on('cambio', (c) => {
+    if (ventana && !ventana.isDestroyed()) {
+      ventana.webContents.send('nexo:conexion', c);
+    }
+    // Refrescar el menu de bandeja si cambia el estado importante.
+    if (['sesion-abierta', 'sesion-cerrada', 'cable-detectado', 'cable-quitado'].includes(c.evento)) {
+      if (bandeja) refrescarMenuBandeja();
+    }
+  });
+  try {
+    await conexion.iniciar();
+    console.log('[nexo] orquestador de conexion arrancado');
+  } catch (e) {
+    console.error('[nexo] no se pudo arrancar la conexion nativa:', e.message);
   }
 }
 
@@ -163,9 +195,15 @@ function crearBandeja() {
 }
 
 function refrescarMenuBandeja() {
-  const estado = servidor
-    ? `iPhone: ${servidor.hayCable ? 'cable listo' : 'por WiFi'}`
-    : 'Servidor no iniciado';
+  const est = conexion?.estado();
+  let estado;
+  if (est?.conectado) {
+    estado = `iPhone conectado (${est.origen})`;
+  } else if (est?.hayCable) {
+    estado = 'iPhone enchufado, esperando la app';
+  } else {
+    estado = servidor ? 'Sin iPhone' : 'Servidor no iniciado';
+  }
 
   const menu = Menu.buildFromTemplate([
     { label: estado, enabled: false },
@@ -214,6 +252,7 @@ function aplicarArranqueConWindows() {
 async function salir() {
   saliendoDeVerdad = true;
   try {
+    if (conexion) await conexion.detener();
     if (servidor) await servidor.detener();
   } catch {
     /* da igual: estamos saliendo */
@@ -227,7 +266,11 @@ ipcMain.handle('nexo:estado', () => ({
   destino: servidor?.destino || null,
   clave: servidor?.clave || null,
   hayCable: servidor?.hayCable || false,
+  conexion: conexion?.estado() || null,
 }));
+
+// El renderer manda ordenes al iPhone (cambiar de lente, zoom, etc.).
+ipcMain.on('nexo:control', (_ev, orden) => conexion?.enviarControl(orden));
 
 app.on('window-all-closed', () => {
   // En Windows, cerrar la ventana no cierra la app si vamos a la bandeja.

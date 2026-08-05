@@ -11,9 +11,12 @@
 //     tipo u8 | longitud u32-BE | carga (longitud bytes)
 //
 //   Tipos de trama:
-//     1 VIDEO    H.264 Annex-B. Los primeros 8 bytes de la carga son la marca
-//                de tiempo (microsegundos, u64-BE); el resto, la unidad NAL.
-//     2 AUDIO    AAC (misma cabecera de tiempo de 8 bytes + datos)
+//     1 VIDEO    H.264 Annex-B. Los 9 primeros bytes de la carga son:
+//                  u64-BE marca de tiempo (microsegundos)
+//                  u8 flags (bit 0 = fotograma clave; el resto reservados)
+//                y despues las NAL. Sin el flag de clave el decodificador se
+//                quedaria en pantalla negra esperando la primera IDR.
+//     2 AUDIO    AAC (u64 tiempo + u8 flags + datos)
 //     3 ESTADO   JSON: lente, zoom, ISO, bateria, temperatura del movil
 //     4 CONTROL  JSON: ordenes del PC al movil (lente, zoom, foco, linterna...)
 //     5 LATIDO   vacio; mantiene viva la conexion y mide la latencia
@@ -42,11 +45,13 @@ function codificarTrama(tipo, carga = Buffer.alloc(0)) {
   return Buffer.concat([cab, carga]);
 }
 
-// Media (video/audio) con marca de tiempo en microsegundos por delante.
-function codificarMedia(tipo, microsegundos, datos) {
-  const t = Buffer.alloc(8);
-  t.writeBigUInt64BE(BigInt(microsegundos), 0);
-  return codificarTrama(tipo, Buffer.concat([t, datos]));
+// Media (video/audio) con marca de tiempo + byte de flags + datos. Bit 0 de
+// flags = fotograma clave (para video); en audio no se usa.
+function codificarMedia(tipo, microsegundos, datos, { clave = false } = {}) {
+  const cab = Buffer.alloc(9);
+  cab.writeBigUInt64BE(BigInt(microsegundos), 0);
+  cab.writeUInt8(clave ? 1 : 0, 8);
+  return codificarTrama(tipo, Buffer.concat([cab, datos]));
 }
 
 function codificarJson(tipo, obj) {
@@ -115,7 +120,15 @@ class Analizador {
 
     if (tipo === TRAMA.VIDEO || tipo === TRAMA.AUDIO) {
       const microsegundos = carga.length >= 8 ? Number(carga.readBigUInt64BE(0)) : 0;
-      this.onTrama({ tipo, nombre: NOMBRE[tipo], microsegundos, datos: carga.slice(8) });
+      const flags = carga.length >= 9 ? carga.readUInt8(8) : 0;
+      const clave = (flags & 0x01) !== 0;
+      this.onTrama({
+        tipo,
+        nombre: NOMBRE[tipo],
+        microsegundos,
+        clave,
+        datos: carga.slice(9),
+      });
     } else if (tipo === TRAMA.ESTADO || tipo === TRAMA.CONTROL) {
       let obj = {};
       try {

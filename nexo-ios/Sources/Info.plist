@@ -41,10 +41,12 @@
   <!-- Permisos: por que la app usa cada cosa (obligatorio o iOS la rechaza) -->
   <key>NSCameraUsageDescription</key>
   <string>Nexo usa la camara para transmitir la imagen a tu PC como webcam.</string>
-  <key>NSMicrophoneUsageDescription</key>
-  <string>Nexo usa el microfono para enviar el audio junto con el video.</string>
   <key>NSLocalNetworkUsageDescription</key>
   <string>Nexo se conecta a tu PC por la red local para transmitir el video por WiFi.</string>
+  <!-- El microfono se declarara cuando el audio este integrado de verdad
+       (AVCaptureAudioDataOutput + AAC). Hoy no se captura, asi que pedir el
+       permiso ahora seria mentirle al usuario. -->
+
 
   <!-- Servicios Bonjour que la app anuncia o busca -->
   <key>NSBonjourServices</key>
@@ -60,10 +62,7 @@
     <string>UIInterfaceOrientationLandscapeRight</string>
   </array>
 
-  <!-- Seguir capturando y transmitiendo con la pantalla activa -->
-  <key>UIBackgroundModes</key>
-  <array>
-    <string>audio</string>
-  </array>
+  <!-- Sin UIBackgroundModes: solo transmite con la app en pantalla. Cuando
+       integremos audio activaremos 'audio' aqui para que siga en background. -->
 </dict>
 </plist>
