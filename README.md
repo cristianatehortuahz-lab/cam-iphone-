@@ -32,9 +32,12 @@ Proyecto en construccion por fases. Cada fase deja algo funcional:
 - [x] **F1** Identidad visual (logo y todos los iconos, generados desde codigo)
 - [x] **F2** Nexo Desktop (Electron: ventana propia, bandeja, servidor embebido, estudio portado)
 - [x] **F3** Transporte (usbmux por cable + protocolo Nexo + decodificador H.264 + Bonjour)
-- [x] **F4** Nexo Cam (app Swift: camara, codificador H.264, transporte, interfaz)
-- [~] **F5** Compilacion e instalacion (workflow de GitHub Actions listo; falta Sideloadly)
-- [ ] **F6** Camara virtual y acabado
+- [x] **F4** Nexo Cam (app Swift: camara, codificador H.264, transporte, interfaz) — **compila en la nube**
+- [x] **F5** Compilacion e instalacion (GitHub Actions produce el .ipa; guia de Sideloadly en INSTALAR-IPHONE.md)
+- [ ] **F6** Camara virtual (integrar OBS) y acabado
+
+La app de iPhone ya **compila** en macOS via GitHub Actions y genera un `.ipa`
+instalable. Para ponerlo en el iPhone por cable: ver **[INSTALAR-IPHONE.md](INSTALAR-IPHONE.md)**.
 
 ## Estructura
 
