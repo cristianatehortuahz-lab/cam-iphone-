@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import Combine
+import Network
 import UIKit
 
 // El cerebro de Nexo Cam: conecta la camara con el codificador y el transporte,

@@ -29,9 +29,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.nexo.camara
+        # Usamos nuestro Info.plist (con los permisos de camara, microfono y red
+        # local). NO ponemos un bloque `info:` porque XcodeGen lo regeneraria y
+        # borraria esos permisos.
         INFOPLIST_FILE: Sources/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_USER_SCRIPT_SANDBOXING: "NO"
-    info:
-      path: Sources/Info.plist

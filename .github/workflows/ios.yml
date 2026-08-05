@@ -29,7 +29,6 @@ jobs:
       - name: Compilar (sin firma)
         working-directory: nexo-ios
         run: |
-          set -o pipefail
           xcodebuild \
             -project Nexo.xcodeproj \
             -scheme Nexo \
@@ -39,7 +38,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build | xcbeautify || xcodebuild -project Nexo.xcodeproj -scheme Nexo -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+            build
 
       - name: Empaquetar .ipa sin firmar
         working-directory: nexo-ios

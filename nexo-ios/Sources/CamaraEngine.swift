@@ -172,7 +172,7 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         guard let d = dispositivoActual else { return }
         try? d.lockForConfiguration()
         if let p = pos, d.isFocusModeSupported(.locked) {
-            d.setFocusModeLockedWithLensPosition(max(0, min(p, 1)), completionHandler: nil)
+            d.setFocusModeLocked(lensPosition: max(0, min(p, 1)), completionHandler: nil)
         } else if d.isFocusModeSupported(.continuousAutoFocus) {
             d.focusMode = .continuousAutoFocus
         }
