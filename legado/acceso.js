@@ -111,4 +111,6 @@ function crearGuardia(clave) {
   return { revisar, revisarSocket, NOMBRE_COOKIE };
 }
 
-module.exports = { cargarClave, crearGuardia, NOMBRE_COOKIE, esLocal };
+// `iguales` se exporta para que el transporte nativo (nexo-desktop) compare la
+// clave con el mismo criterio y en tiempo constante, sin duplicar el codigo.
+module.exports = { cargarClave, crearGuardia, NOMBRE_COOKIE, esLocal, iguales };

@@ -24,6 +24,13 @@
 const MAGIA = Buffer.from('NEXO1', 'ascii');
 const VERSION = 1;
 
+// Techo de tamano de trama. La longitud viaja como u32, asi que sin limite un
+// par puede declarar 4 GB y gotear bytes: el analizador acumularia hasta agotar
+// la memoria del proceso. 4 MB deja holgura de sobra para un fotograma clave a
+// 4K (un IDR a 32 Mbps ronda los 400 KB) y corta el ataque en seco.
+// Si cambia aqui, cambiar tambien MAX_TRAMA en ProtocoloNexo.swift.
+const MAX_TRAMA = 4 * 1024 * 1024;
+
 const TRAMA = { VIDEO: 1, AUDIO: 2, ESTADO: 3, CONTROL: 4, LATIDO: 5 };
 const NOMBRE = { 1: 'video', 2: 'audio', 3: 'estado', 4: 'control', 5: 'latido' };
 
@@ -66,12 +73,16 @@ class Analizador {
   constructor({ onSaludo, onTrama, onError } = {}) {
     this.buffer = Buffer.alloc(0);
     this.saludoHecho = false;
+    // Un flujo que incumple el protocolo no se recupera: se marca roto y se deja
+    // de leer. Quien nos alimenta cierra el socket al ver el error fatal.
+    this.roto = false;
     this.onSaludo = onSaludo || (() => {});
     this.onTrama = onTrama || (() => {});
     this.onError = onError || (() => {});
   }
 
   feed(trozo) {
+    if (this.roto) return;
     this.buffer = Buffer.concat([this.buffer, trozo]);
     // Un solo trozo puede completar varias tramas: se procesan en bucle.
     // eslint-disable-next-line no-constant-condition
@@ -84,26 +95,37 @@ class Analizador {
     }
   }
 
+  // Corta el flujo para siempre y avisa con un error marcado como fatal.
+  #romper(mensaje) {
+    this.roto = true;
+    this.buffer = Buffer.alloc(0);
+    const err = new Error(mensaje);
+    err.fatal = true;
+    this.onError(err);
+    return false;
+  }
+
   #leerSaludo() {
     const minimo = MAGIA.length + 1 + 4;
     if (this.buffer.length < minimo) return false;
 
-    if (!this.buffer.slice(0, MAGIA.length).equals(MAGIA)) {
-      this.onError(new Error('Saludo invalido: no es un flujo Nexo'));
-      this.buffer = Buffer.alloc(0);
-      return false;
+    if (!this.buffer.subarray(0, MAGIA.length).equals(MAGIA)) {
+      return this.#romper('Saludo invalido: no es un flujo Nexo');
     }
     const version = this.buffer.readUInt8(MAGIA.length);
     const lonJson = this.buffer.readUInt32BE(MAGIA.length + 1);
+    if (lonJson > MAX_TRAMA) {
+      return this.#romper(`Saludo de ${lonJson} bytes: supera el maximo de ${MAX_TRAMA}`);
+    }
     if (this.buffer.length < minimo + lonJson) return false;
 
     let capacidades = {};
     try {
-      capacidades = JSON.parse(this.buffer.slice(minimo, minimo + lonJson).toString('utf8'));
+      capacidades = JSON.parse(this.buffer.subarray(minimo, minimo + lonJson).toString('utf8'));
     } catch {
       this.onError(new Error('Saludo con JSON invalido'));
     }
-    this.buffer = this.buffer.slice(minimo + lonJson);
+    this.buffer = this.buffer.subarray(minimo + lonJson);
     this.saludoHecho = true;
     this.onSaludo({ version, capacidades });
     return true;
@@ -113,10 +135,13 @@ class Analizador {
     if (this.buffer.length < 5) return false;
     const tipo = this.buffer.readUInt8(0);
     const longitud = this.buffer.readUInt32BE(1);
+    if (longitud > MAX_TRAMA) {
+      return this.#romper(`Trama de ${longitud} bytes: supera el maximo de ${MAX_TRAMA}`);
+    }
     if (this.buffer.length < 5 + longitud) return false;
 
-    const carga = this.buffer.slice(5, 5 + longitud);
-    this.buffer = this.buffer.slice(5 + longitud);
+    const carga = this.buffer.subarray(5, 5 + longitud);
+    this.buffer = this.buffer.subarray(5 + longitud);
 
     if (tipo === TRAMA.VIDEO || tipo === TRAMA.AUDIO) {
       const microsegundos = carga.length >= 8 ? Number(carga.readBigUInt64BE(0)) : 0;
@@ -127,7 +152,10 @@ class Analizador {
         nombre: NOMBRE[tipo],
         microsegundos,
         clave,
-        datos: carga.slice(9),
+        // Copia, no vista: subarray comparte memoria con el buffer de lectura, y
+        // el fotograma viaja por IPC hasta el renderer. Con una vista, cada
+        // fotograma en vuelo mantendria vivo todo el bloque acumulado.
+        datos: Buffer.from(carga.subarray(9)),
       });
     } else if (tipo === TRAMA.ESTADO || tipo === TRAMA.CONTROL) {
       let obj = {};
@@ -138,7 +166,7 @@ class Analizador {
       }
       this.onTrama({ tipo, nombre: NOMBRE[tipo], obj });
     } else {
-      this.onTrama({ tipo, nombre: NOMBRE[tipo] || 'desconocido', datos: carga });
+      this.onTrama({ tipo, nombre: NOMBRE[tipo] || 'desconocido', datos: Buffer.from(carga) });
     }
     return true;
   }
@@ -147,6 +175,7 @@ class Analizador {
 module.exports = {
   MAGIA,
   VERSION,
+  MAX_TRAMA,
   TRAMA,
   NOMBRE,
   codificarSaludo,

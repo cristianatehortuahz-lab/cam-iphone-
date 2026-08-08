@@ -4,15 +4,12 @@ const { app, BrowserWindow, Tray, Menu, shell, ipcMain, nativeImage } = require(
 const path = require('path');
 const { Ajustes } = require('./ajustes');
 const { Conexion } = require('./conexion');
+const { rutaLegado } = require('./clave');
 
-// El servidor legado (auditado) corre embebido dentro de la app: da la senal
-// WebRTC y recibe al iPhone mientras no exista el transporte nativo (F3). En
-// produccion se copia a resources/legado; en desarrollo esta en ../../../legado.
-function rutaLegado() {
-  const empaquetado = path.join(process.resourcesPath || '', 'legado', 'server.js');
-  const dev = path.join(__dirname, '..', '..', '..', 'legado', 'server.js');
-  return require('fs').existsSync(empaquetado) ? empaquetado : dev;
-}
+// El servidor legado (auditado) corre embebido dentro de la app: sirve el
+// estudio (la interfaz que carga la ventana) y mantiene la ruta por navegador
+// como reserva junto al transporte nativo. En produccion se copia a
+// resources/legado; en desarrollo esta en ../../../legado.
 
 const RECURSOS = path.join(__dirname, '..', '..', 'recursos');
 
@@ -50,7 +47,7 @@ async function arrancar() {
 
 async function iniciarServidor() {
   try {
-    const legado = require(rutaLegado());
+    const legado = require(rutaLegado('server.js'));
     servidor = await legado.iniciar({ silencioso: true });
     console.log('[nexo] servidor legado en', servidor.puertos, 'cable:', servidor.hayCable);
   } catch (err) {

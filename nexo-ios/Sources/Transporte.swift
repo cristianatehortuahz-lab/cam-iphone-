@@ -28,9 +28,21 @@ final class SesionNexo {
 
         analizador.alSaludo = { [weak self] _, caps in
             self?.capacidadesPC = caps
+            // Por cable el PC incluye su clave: aprovechamos para emparejar, y
+            // asi este iPhone podra volver a ese PC por WiFi sin teclear nada.
+            if let k = caps["clave"] as? String, !k.isEmpty {
+                Emparejamiento.guardar(k)
+            }
             self?.alListo?(caps)
         }
         analizador.alControl = { [weak self] orden in self?.alControl?(orden) }
+        // Un flujo que incumple el protocolo no se recupera: se corta la conexion
+        // en vez de seguir acumulando.
+        analizador.alError = { [weak self] mensaje in
+            NSLog("Nexo: protocolo invalido: %@", mensaje)
+            self?.cerrar()
+            self?.alFin?()
+        }
     }
 
     func iniciar() {

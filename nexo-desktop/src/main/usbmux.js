@@ -49,8 +49,17 @@ function plist(dict) {
 
 const CLIENTE = { ClientVersionString: 'Nexo', ProgName: 'Nexo', kLibUSBMuxVersion: 3 };
 
-// Envia un mensaje y devuelve { socket, respuesta } con la primera respuesta
+// Envia un mensaje y devuelve { socket, xml, sobrante } con la primera respuesta
 // plist. El socket se deja abierto: en Connect exitoso ES el tunel.
+//
+// IMPORTANTE: al resolver se sueltan TODOS los manejadores que puso esta
+// funcion. Si no, el lector de plist seguiria enganchado al socket que ya es el
+// tunel de video y concatenaria cada trozo a un buffer que no se vacia nunca
+// (a 12 Mbps, ~90 MB por minuto). Quien recibe el socket lo hereda limpio.
+//
+// `sobrante` son los bytes que venian pegados a la respuesta plist en el mismo
+// segmento TCP: pertenecen ya al flujo del tunel y hay que darselos al
+// analizador, o el flujo arranca perdiendo datos.
 function transaccion(dict) {
   return new Promise((resolver, rechazar) => {
     const tag = tagSiguiente++;
@@ -58,30 +67,47 @@ function transaccion(dict) {
     let buffer = Buffer.alloc(0);
     let listo = false;
 
-    const fallar = (e) => {
-      if (!listo) {
-        listo = true;
-        socket.destroy();
-        rechazar(e);
-      }
+    const temporizador = setTimeout(
+      () => fallar(new Error('usbmux no respondio (tiempo agotado)')),
+      4000
+    );
+
+    // Deja el socket sin rastro de esta transaccion.
+    const soltar = () => {
+      clearTimeout(temporizador);
+      socket.off('data', alDato);
+      socket.off('error', fallar);
+      socket.off('close', alCierre);
     };
 
-    socket.on('connect', () => socket.write(envolver(plist(dict), tag)));
+    const fallar = (e) => {
+      if (listo) return;
+      listo = true;
+      soltar();
+      socket.destroy();
+      rechazar(e);
+    };
 
-    socket.on('data', (trozo) => {
+    const alCierre = () =>
+      fallar(new Error('usbmux cerro la conexion. ¿Esta corriendo Apple Mobile Device Service?'));
+
+    const alDato = (trozo) => {
       buffer = Buffer.concat([buffer, trozo]);
       if (buffer.length < 16) return;
       const longitud = buffer.readUInt32LE(0);
       if (buffer.length < longitud) return; // aun falta
 
-      const xml = buffer.slice(16, longitud).toString('utf8');
+      const xml = buffer.subarray(16, longitud).toString('utf8');
+      const sobrante = Buffer.from(buffer.subarray(longitud));
       listo = true;
-      resolver({ socket, xml });
-    });
+      soltar();
+      resolver({ socket, xml, sobrante });
+    };
 
+    socket.on('connect', () => socket.write(envolver(plist(dict), tag)));
+    socket.on('data', alDato);
     socket.on('error', fallar);
-    socket.on('close', () => fallar(new Error('usbmux cerro la conexion. ¿Esta corriendo Apple Mobile Device Service?')));
-    setTimeout(() => fallar(new Error('usbmux no respondio (tiempo agotado)')), 4000);
+    socket.on('close', alCierre);
   });
 }
 
@@ -127,11 +153,13 @@ async function listarDispositivos() {
   return leerDispositivos(xml);
 }
 
-// Abre un tunel al puerto TCP que la app iOS escucha en el iPhone. Devuelve un
-// net.Socket ya conectado a traves del cable. El puerto va en orden de red.
+// Abre un tunel al puerto TCP que la app iOS escucha en el iPhone. Devuelve
+// { socket, sobrante }: el socket ya tunelizado por el cable, sin manejadores
+// nuestros, y los bytes del flujo que venian pegados a la respuesta plist.
+// El puerto va en orden de red.
 async function conectar(deviceID, puerto) {
   const puertoRed = ((puerto & 0xff) << 8) | ((puerto >> 8) & 0xff);
-  const { socket, xml } = await transaccion({
+  const { socket, xml, sobrante } = await transaccion({
     MessageType: 'Connect',
     DeviceID: deviceID,
     PortNumber: puertoRed,
@@ -145,7 +173,7 @@ async function conectar(deviceID, puerto) {
     throw new Error(`No se pudo tunelizar al puerto ${puerto}: ${motivos[resultado] || 'codigo ' + resultado}`);
   }
   // A partir de aqui, este socket ES el flujo directo con el iPhone.
-  return socket;
+  return { socket, sobrante };
 }
 
 // Comprueba si usbmux esta accesible (servicio de Apple corriendo).

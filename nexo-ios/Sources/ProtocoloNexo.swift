@@ -21,6 +21,11 @@ enum ProtocoloNexo {
     static let magia = Data("NEXO1".utf8)
     static let version: UInt8 = 1
 
+    // Techo de tamano de trama. Sin limite, un par puede declarar 4 GB en el u32
+    // de longitud y gotear bytes hasta agotar la memoria. Debe coincidir con
+    // MAX_TRAMA en nexo-desktop/src/main/protocolo.js.
+    static let maxTrama = 4 * 1024 * 1024
+
     // --- Escritura de enteros en big-endian ---------------------------------
 
     private static func u32BE(_ v: UInt32) -> Data {
@@ -59,7 +64,10 @@ enum ProtocoloNexo {
     static func codificarMedia(_ tipo: TipoTrama, microsegundos: UInt64,
                                clave: Bool = false, datos: Data) -> Data {
         var carga = u64BE(microsegundos)
-        carga.append(clave ? 1 : 0)
+        // UInt8 explicito: `append(clave ? 1 : 0)` deja que Swift elija entre
+        // varias sobrecargas de Data.append segun como infiera el literal, y el
+        // byte de flags llegaba a cero al PC. Aqui no hay nada que inferir.
+        carga.append(UInt8(clave ? 1 : 0))
         carga.append(datos)
         return codificarTrama(tipo, carga)
     }
@@ -80,12 +88,17 @@ enum ProtocoloNexo {
 final class AnalizadorNexo {
     private var buffer = Data()
     private var saludoHecho = false
+    // Un flujo que incumple el protocolo no se recupera: se marca roto y se deja
+    // de leer. Quien nos alimenta cierra la conexion al recibir alError.
+    private(set) var roto = false
 
     var alSaludo: ((_ version: UInt8, _ capacidades: [String: Any]) -> Void)?
     var alControl: ((_ orden: [String: Any]) -> Void)?
     var alLatido: (() -> Void)?
+    var alError: ((String) -> Void)?
 
     func alimentar(_ trozo: Data) {
+        guard !roto else { return }
         buffer.append(trozo)
         while true {
             if !saludoHecho {
@@ -94,6 +107,14 @@ final class AnalizadorNexo {
                 break
             }
         }
+    }
+
+    // Corta el flujo para siempre y avisa. Devuelve false para cortar el bucle.
+    private func romper(_ mensaje: String) -> Bool {
+        roto = true
+        buffer.removeAll()
+        alError?(mensaje)
+        return false
     }
 
     private func leerU32BE(_ offset: Int) -> UInt32 {
@@ -108,10 +129,12 @@ final class AnalizadorNexo {
 
         let cabeceraMagia = buffer.subdata(in: buffer.startIndex..<(buffer.startIndex + ProtocoloNexo.magia.count))
         guard cabeceraMagia == ProtocoloNexo.magia else {
-            buffer.removeAll()
-            return false
+            return romper("Saludo invalido: no es un flujo Nexo")
         }
         let lonJson = Int(leerU32BE(ProtocoloNexo.magia.count + 1))
+        guard lonJson <= ProtocoloNexo.maxTrama else {
+            return romper("Saludo de \(lonJson) bytes: supera el maximo de \(ProtocoloNexo.maxTrama)")
+        }
         guard buffer.count >= minimo + lonJson else { return false }
 
         let inicio = buffer.startIndex + minimo
@@ -129,6 +152,9 @@ final class AnalizadorNexo {
         guard buffer.count >= 5 else { return false }
         let tipo = buffer[buffer.startIndex]
         let longitud = Int(leerU32BE(1))
+        guard longitud <= ProtocoloNexo.maxTrama else {
+            return romper("Trama de \(longitud) bytes: supera el maximo de \(ProtocoloNexo.maxTrama)")
+        }
         guard buffer.count >= 5 + longitud else { return false }
 
         let inicio = buffer.startIndex + 5
