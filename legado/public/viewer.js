@@ -448,7 +448,13 @@ function dibujarGuias() {
   }
 
   elGuias.classList.remove('oculto');
-  elRecuadro.style.display = '';
+
+  // Con el recorte aplicado, el lienzo YA tiene esa proporcion, asi que el
+  // recuadro acabaria bordeando la imagen entera sin informar de nada. Se
+  // oculta solo el borde: el resto de la funcion sigue igual, y las zonas de
+  // interfaz y la rejilla se colocan solas donde toca, porque el rectangulo
+  // calculado abajo coincide exactamente con la imagen.
+  elRecuadro.style.display = elRecortar.checked ? 'none' : '';
 
   const [a, b] = formato.split(':').map(Number);
   const proporcion = a / b;
