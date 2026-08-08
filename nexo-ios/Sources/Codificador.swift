@@ -13,21 +13,29 @@ import CoreMedia
 
 final class Codificador {
     private var sesion: VTCompressionSession?
-    private let ancho: Int32
-    private let alto: Int32
+    // Medidas de la sesion actual. No son las que se piden, sino las que la
+    // camara entrega de verdad (ver `codificar`).
+    private var ancho: Int32 = 0
+    private var alto: Int32 = 0
+    private var fps: Int32 = 30
+    private var bitrate: Int = 12_000_000
 
     // Entrega (datos Annex-B, marca de tiempo en microsegundos, esClave).
     var alFotograma: ((Data, UInt64, Bool) -> Void)?
 
     private static let codigoInicio = Data([0x00, 0x00, 0x00, 0x01])
 
-    init(ancho: Int32, alto: Int32) {
-        self.ancho = ancho
-        self.alto = alto
+    // La sesion no se crea aqui: hace falta ver un fotograma real primero.
+    func iniciar(fps: Int32, bitrate: Int) {
+        self.fps = fps
+        self.bitrate = bitrate
+        detener()
     }
 
-    func iniciar(fps: Int32, bitrate: Int) {
+    private func crearSesion(ancho: Int32, alto: Int32) {
         detener()
+        self.ancho = ancho
+        self.alto = alto
 
         var sesionCreada: VTCompressionSession?
         let estado = VTCompressionSessionCreate(
@@ -63,6 +71,21 @@ final class Codificador {
     }
 
     func codificar(_ pixelBuffer: CVPixelBuffer, tiempo: CMTime) {
+        // La sesion se dimensiona con lo que la camara entrega DE VERDAD, no con
+        // lo que se le pidio. Si no coinciden, VideoToolbox escala el fotograma
+        // hasta el tamano de la sesion sin respetar la proporcion, y la imagen
+        // sale deformada (pedir 1080x1920 con un buffer apaisado dejaba a todo
+        // el mundo estirado a lo alto y mas delgado).
+        //
+        // Como se recrea al vuelo, tambien cubre los cambios de lente o de
+        // formato, que pueden traer un tamano distinto sin previo aviso.
+        let w = Int32(CVPixelBufferGetWidth(pixelBuffer))
+        let h = Int32(CVPixelBufferGetHeight(pixelBuffer))
+        if sesion == nil || w != ancho || h != alto {
+            NSLog("Nexo: codificador a %dx%d (lo que entrega la camara)", w, h)
+            crearSesion(ancho: w, alto: h)
+        }
+
         guard let s = sesion else { return }
         VTCompressionSessionEncodeFrame(
             s,
@@ -81,19 +104,6 @@ final class Codificador {
     private func procesarSalida(_ sb: CMSampleBuffer) {
         guard let dataBuffer = CMSampleBufferGetDataBuffer(sb) else { return }
 
-        // Fotograma clave = el que NO esta marcado como "no sincronizado". Se lee
-        // del adjunto del sample buffer, sin punteros crudos.
-        let adjuntos = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]]
-        let noSync = (adjuntos?.first?[kCMSampleAttachmentKey_NotSync] as? Bool) ?? false
-        let esClave = !noSync
-
-        var salida = Data()
-
-        // En un fotograma clave, anteponer SPS/PPS en Annex-B.
-        if esClave, let fmt = CMSampleBufferGetFormatDescription(sb) {
-            salida.append(parametrosAnnexB(fmt))
-        }
-
         // Datos del fotograma: vienen en AVCC (longitud de 4 bytes + NAL). Se
         // recorren las NAL y se sustituye el prefijo de longitud por el codigo
         // de inicio Annex-B.
@@ -104,18 +114,38 @@ final class Codificador {
                                           totalLengthOut: &totalLength, dataPointerOut: &dataPointer) == noErr,
               let ptr = dataPointer else { return }
 
+        // De paso averiguamos si el fotograma es clave, mirando el tipo de cada
+        // NAL (5 = IDR). La verdad esta aqui, en el bitstream.
+        //
+        // Antes esto se leia del adjunto NotSync del sample buffer y el
+        // resultado llegaba SIEMPRE como delta al PC, que se quedaba en negro
+        // para siempre esperando una IDR (su decodificador descarta todo hasta
+        // la primera). Los parametros SPS/PPS si se anteponian, o sea que el
+        // dato existia y se perdia por el camino: leerlo de las NAL lo elimina
+        // como fuente de fallo.
         let bytes = UnsafeRawPointer(ptr).assumingMemoryBound(to: UInt8.self)
+        var cuerpo = Data()
+        var esClave = false
         var offset = 0
         while offset + 4 <= totalLength {
             var nalLength: UInt32 = 0
             for i in 0..<4 { nalLength = (nalLength << 8) | UInt32(bytes[offset + i]) }
             offset += 4
             let len = Int(nalLength)
-            if offset + len > totalLength { break }
-            salida.append(Self.codigoInicio)
-            salida.append(Data(bytes: bytes + offset, count: len))
+            if len <= 0 || offset + len > totalLength { break }
+            if (bytes[offset] & 0x1f) == 5 { esClave = true }
+            cuerpo.append(Self.codigoInicio)
+            cuerpo.append(Data(bytes: bytes + offset, count: len))
             offset += len
         }
+
+        // En un fotograma clave, anteponer SPS/PPS en Annex-B para que el PC
+        // pueda empezar a decodificar en cualquier momento.
+        var salida = Data()
+        if esClave, let fmt = CMSampleBufferGetFormatDescription(sb) {
+            salida.append(parametrosAnnexB(fmt))
+        }
+        salida.append(cuerpo)
 
         let pts = CMSampleBufferGetPresentationTimeStamp(sb)
         let micros = UInt64(max(0, CMTimeGetSeconds(pts) * 1_000_000))

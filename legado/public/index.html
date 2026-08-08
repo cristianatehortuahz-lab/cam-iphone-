@@ -274,6 +274,22 @@
         gap: 8px;
       }
 
+      /* Casilla del panel. Se sobreescribe el justify-content de .grupo label,
+         que separa etiqueta y valor a los extremos: aqui van juntas. */
+      .grupo label.interruptor {
+        justify-content: flex-start;
+        align-items: center;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .grupo label.interruptor input {
+        width: auto;
+        margin: 0;
+        accent-color: var(--acento);
+        cursor: pointer;
+      }
+
       input[type='range'] {
         width: 100%;
         -webkit-appearance: none;
@@ -402,10 +418,13 @@
           </select>
           <div class="pareja">
             <select id="resolucion" disabled>
-              <option value="1280x720">720p</option>
-              <option value="1920x1080" selected>1080p</option>
-              <option value="2560x1440">1440p</option>
-              <option value="3840x2160">4K</option>
+              <option value="1080x1920" selected>1080p vertical</option>
+              <option value="720x1280">720p vertical</option>
+              <option value="2160x3840">4K vertical</option>
+              <option value="1920x1080">1080p horizontal</option>
+              <option value="1280x720">720p horizontal</option>
+              <option value="2560x1440">1440p horizontal</option>
+              <option value="3840x2160">4K horizontal</option>
             </select>
             <select id="fps" disabled>
               <option value="24">24 fps</option>
@@ -470,6 +489,13 @@
             <button id="rejillaBtn">Rejilla</button>
             <button id="zonasBtn">Zona UI</button>
           </div>
+          <!-- El formato de arriba es solo una guia dibujada encima. Esto lo
+               aplica de verdad: recorta la imagen a esa proporcion, y lo que
+               sale hacia la grabacion y OBS ya va recortado. -->
+          <label class="interruptor">
+            <input type="checkbox" id="recortar" />
+            Recortar de verdad (no solo la guia)
+          </label>
         </div>
 
         <div class="grupo">

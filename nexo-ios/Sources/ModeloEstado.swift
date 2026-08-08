@@ -16,7 +16,10 @@ final class ModeloEstado: ObservableObject {
     @Published var transmitiendo = false
     @Published var conectado = false
     @Published var origenConexion = ""        // "cable" | "wifi"
-    @Published var resolucion = "1920x1080"
+    // Vertical por defecto: Nexo es para contenido de redes, y es lo que
+    // promete CamaraEngine al girar la conexion 90 grados. Arrancar en
+    // horizontal obligaba a cambiarlo a mano en cada sesion.
+    @Published var resolucion = "1080x1920"
     @Published var fps = 30
     @Published var pcsWifi: [PCNexo] = []
     @Published var mensaje = "Listo para transmitir"
@@ -71,8 +74,9 @@ final class ModeloEstado: ObservableObject {
     private func aplicarCamara() {
         let (ancho, alto) = dimensiones()
         camara.configurar(lenteID: lenteActualID, ancho: ancho, alto: alto, fps: fps)
-        // (Re)crear el codificador a la resolucion elegida.
-        let cod = Codificador(ancho: Int32(ancho), alto: Int32(alto))
+        // (Re)crear el codificador. No se le dan medidas: las toma del primer
+        // fotograma real de la camara, que es la unica fuente fiable.
+        let cod = Codificador()
         cod.alFotograma = { [weak self] datos, micros, clave in
             self?.sesion?.enviarVideo(datos, microsegundos: micros, esClave: clave)
         }
@@ -86,8 +90,12 @@ final class ModeloEstado: ObservableObject {
     }
 
     private func bitrate() -> Int {
-        let (w, _) = dimensiones()
-        let base = w >= 3840 ? 32 : w >= 2560 ? 20 : w >= 1920 ? 12 : 6
+        let (w, h) = dimensiones()
+        // El lado mayor, no el ancho. Mirando solo el ancho, 1080x1920 (vertical)
+        // caia en el tramo de 6 Mbps pese a tener los mismos pixeles que
+        // 1920x1080: la mitad de bitrate del que le toca, y se notaba.
+        let lado = max(w, h)
+        let base = lado >= 3840 ? 32 : lado >= 2560 ? 20 : lado >= 1920 ? 12 : 6
         return (fps >= 50 ? base * 3 / 2 : base) * 1_000_000
     }
 
@@ -120,12 +128,19 @@ final class ModeloEstado: ObservableObject {
 
     func conectarWifi(_ pc: PCNexo) {
         guard case let .service(name, type, domain, _) = pc.endpoint else { return }
+        // Por WiFi el PC exige la clave: escucha en toda la red local y sin ella
+        // cualquiera podria ocupar la sesion. La clave se aprende conectando una
+        // vez por cable, que es el primer paso de la guia de instalacion.
+        guard let clavePC = Emparejamiento.leer() else {
+            mensaje = "Conecta una vez por cable para emparejar este PC."
+            return
+        }
         // Resolver el servicio y conectar. NWConnection acepta el endpoint bonjour
         // directamente, asi que reusamos ClienteWifi con host/puerto resueltos por
         // el propio Network framework a traves del endpoint.
         _ = (name, type, domain)
         let conexion = NWConnection(to: pc.endpoint, using: .tcp)
-        let caps: [String: Any] = ["rol": "emisor", "app": "Nexo Cam"]
+        let caps: [String: Any] = ["rol": "emisor", "app": "Nexo Cam", "clave": clavePC]
         let ses = SesionNexo(conexion, capacidades: caps)
         adoptarSesion(ses, origen: "wifi")
         ses.iniciar()

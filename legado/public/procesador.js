@@ -272,7 +272,11 @@ class ProcesadorImagen {
     // repetir trabajo cuando la pantalla va mas rapida que la camara. En la
     // ruta nativa (VideoFrame externo) usamos requestAnimationFrame: cada nuevo
     // frame llega por ponerFrameExterno y se dibuja aqui.
-    if (!this.frameExterno && this.video.requestVideoFrameCallback) {
+    // requestVideoFrameCallback solo sirve si el <video> tiene fuente. Sin
+    // comprobarlo, en la ruta nativa (donde el <video> esta vacio) el bucle se
+    // enganchaba a un callback que no se dispara nunca y se detenia en seco.
+    const hayVideo = Boolean(this.video.srcObject || this.video.currentSrc);
+    if (!this.frameExterno && hayVideo && this.video.requestVideoFrameCallback) {
       this.video.requestVideoFrameCallback(() => this.#bucle());
     } else {
       this.pendiente = requestAnimationFrame(() => this.#bucle());

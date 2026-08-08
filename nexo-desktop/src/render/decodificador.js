@@ -33,13 +33,21 @@ class DecodificadorVideo {
     }
   }
 
+  // El VideoFrame se ENTREGA a onFrame, que pasa a ser su dueño y debe cerrarlo
+  // cuando termine (son memoria de GPU: no se pueden dejar sueltos).
+  //
+  // Antes se cerraba aqui mismo, en un `finally`, nada mas volver de onFrame. El
+  // consumidor —el procesador de color, que lo guarda para dibujarlo en el
+  // siguiente fotograma— se quedaba con un frame ya cerrado: displayWidth 0,
+  // lienzo de 0x0 y pantalla en negro con el video llegando entero.
   #crear() {
     this.decoder = new VideoDecoder({
       output: (frame) => {
         try {
           this.onFrame(frame);
-        } finally {
-          frame.close(); // liberar cuanto antes: los VideoFrame consumen memoria de GPU
+        } catch (e) {
+          frame.close(); // si el consumidor falla, nadie mas lo va a liberar
+          this.onError(e);
         }
       },
       error: (e) => this.onError(e),
@@ -64,14 +72,22 @@ class DecodificadorVideo {
   // tiempo que venia en la trama Nexo.
   decodificar(datos, microsegundos, esClave) {
     if (!this.configurado) this.configurar();
+
+    // No nos fiamos solo del flag del emisor. Nexo Cam marca como delta hasta
+    // los fotogramas que llevan una IDR de verdad (el bit se pierde en el
+    // camino), y creerselo dejaba el estudio en negro para siempre: sin una
+    // clave, la condicion de abajo descarta absolutamente todo. El bitstream no
+    // miente, asi que se confirma mirando las NAL.
+    const clave = esClave || DecodificadorVideo.esFotogramaClave(datos);
+
     // El decodificador necesita empezar por un fotograma clave; los delta que
     // lleguen antes se descartan para no arrancar con basura.
     if (this.esperandoClave) {
-      if (!esClave) return;
+      if (!clave) return;
       this.esperandoClave = false;
     }
     const chunk = new EncodedVideoChunk({
-      type: esClave ? 'key' : 'delta',
+      type: clave ? 'key' : 'delta',
       timestamp: microsegundos,
       data: datos,
     });
@@ -84,8 +100,13 @@ class DecodificadorVideo {
 
   // Detecta si una NAL Annex-B contiene un fotograma clave (IDR, tipo NAL 5).
   // Se salta el codigo de inicio y mira los 5 bits bajos del primer byte NAL.
+  //
+  // Sin limite de ventana: el bucle ya sale en la primera NAL que decide
+  // (IDR/SPS/PPS -> clave, slice no-IDR -> delta), asi que el coste real es de
+  // unos pocos bytes. Con el tope de 64 que habia antes, un fotograma cuyo SEI
+  // fuera largo se clasificaba mal por no llegar a mirar la NAL que importa.
   static esFotogramaClave(datos) {
-    for (let i = 0; i + 3 < datos.length && i < 64; i++) {
+    for (let i = 0; i + 3 < datos.length; i++) {
       const codigo3 = datos[i] === 0 && datos[i + 1] === 0 && datos[i + 2] === 1;
       const codigo4 = datos[i] === 0 && datos[i + 1] === 0 && datos[i + 2] === 0 && datos[i + 3] === 1;
       if (codigo3 || codigo4) {

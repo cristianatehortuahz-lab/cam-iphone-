@@ -25,6 +25,7 @@ const elExposicionCam = $('exposicion');
 const elEnfoque = $('enfoque');
 const elBalance = $('balance');
 const elFormato = $('formato');
+const elRecortar = $('recortar');
 const elPreset = $('preset');
 
 const elGuias = $('guias');
@@ -62,6 +63,11 @@ const procesador = new ProcesadorImagen(elVideo);
 // entregarle VideoFrame decodificados (ver puente.js). En navegador plano,
 // asignarlo a window es inofensivo.
 window.procesador = procesador;
+
+// Lo que necesita puente.js para gobernar el estudio desde la ruta nativa. Son
+// declaraciones de funcion, asi que ya estan izadas cuando se ejecuta esto.
+window.pintarEstadoMovil = pintarEstadoMovil;
+window.habilitarControles = habilitarControles;
 elLienzo.replaceWith(procesador.canvas);
 procesador.canvas.id = 'lienzo';
 const elSalida = procesador.canvas;
@@ -214,6 +220,13 @@ function enviar(mensaje) {
 }
 
 function ordenar(accion, valor) {
+  // Por la ruta nativa (Nexo Cam por cable) el iPhone no esta en la
+  // senalizacion WebSocket —no se registra como 'movil'—, asi que una orden
+  // enviada por ahi no la recibe nadie. Va por el transporte de Nexo.
+  if (window.nexoNativoActivo && window.nexo && window.nexo.enviarControl) {
+    window.nexo.enviarControl({ accion, valor });
+    return;
+  }
   enviar({ tipo: 'control', accion, valor });
 }
 
@@ -372,7 +385,6 @@ async function atenderOferta(msg) {
 
 function cerrar() {
   if (grabadora && grabadora.state !== 'inactive') pararGrabacion();
-  procesador.parar();
   if (pc) {
     pc.ontrack = pc.onicecandidate = pc.onconnectionstatechange = null;
     pc.close();
@@ -380,6 +392,18 @@ function cerrar() {
   }
   flujo = null;
   elVideo.srcObject = null;
+
+  // Si el video esta entrando por el transporte nativo (Nexo Cam por cable), lo
+  // de arriba es todo lo que hay que desmontar: lo de abajo es estado de la
+  // ruta WebRTC y no nos incumbe.
+  //
+  // Hace falta el guardia porque el iPhone conectado por cable NO aparece como
+  // 'movil' en la senalizacion WebSocket, asi que esta funcion se llama como si
+  // no hubiera nadie. Sin esto paraba el bucle de dibujo y volvia a tapar el
+  // lienzo con la pantalla de espera mientras el video seguia llegando entero.
+  if (window.nexoNativoActivo) return;
+
+  procesador.parar();
   elEspera.classList.remove('oculto');
   elGuias.classList.add('oculto');
   habilitarControles(false);
@@ -683,7 +707,26 @@ botonComparar.addEventListener('mousedown', () => verOriginal(true));
 botonComparar.addEventListener('mouseup', () => verOriginal(false));
 botonComparar.addEventListener('mouseleave', () => verOriginal(false));
 
-elFormato.addEventListener('change', dibujarGuias);
+// El recorte real: pasa la proporcion elegida al procesador, que la aplica en
+// el shader. Con el recuadro de guia solo se dibuja encima; con esto la imagen
+// sale ya recortada hacia el lienzo, la grabacion y OBS.
+//
+// Sirve para sacar vertical de un movil que emite apaisado: eliges 9:16 y
+// marcas la casilla. Se pierde resolucion (se recorta), pero la proporcion es
+// correcta y no deforma nada.
+function aplicarRecorte() {
+  const activo = elRecortar.checked && elFormato.value !== 'libre';
+  if (!activo) {
+    procesador.recorte = 0;
+  } else {
+    const [a, b] = elFormato.value.split(':').map(Number);
+    procesador.recorte = a / b;
+  }
+  dibujarGuias();
+}
+
+elFormato.addEventListener('change', aplicarRecorte);
+elRecortar.addEventListener('change', aplicarRecorte);
 
 $('rejillaBtn').addEventListener('click', () => {
   const oculta = elRejilla.classList.toggle('oculto');

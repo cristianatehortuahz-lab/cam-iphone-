@@ -103,14 +103,21 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         salida.setSampleBufferDelegate(self, queue: colaVideo)
         if sesion.canAddOutput(salida) { sesion.addOutput(salida) }
 
-        // Orientacion vertical por defecto (contenido para redes).
-        if let con = salida.connection(with: .video) {
-            if #available(iOS 17.0, *) {
+        sesion.commitConfiguration()
+
+        // Orientacion vertical (contenido para redes). Va DESPUES del commit y
+        // comprobando que el angulo esta soportado: dentro del bloque de
+        // configuracion, cambiar activeFormat justo antes puede rehacer la
+        // conexion y perder el angulo, y asignar uno no soportado se ignora en
+        // silencio. Si esto no se aplica, la camara entrega apaisado.
+        if let con = salida.connection(with: .video), #available(iOS 17.0, *) {
+            if con.isVideoRotationAngleSupported(90) {
                 con.videoRotationAngle = 90
+            } else {
+                NSLog("Nexo: la conexion no admite giro de 90 grados; se emitira apaisado")
             }
         }
 
-        sesion.commitConfiguration()
         alEstado?()
     }
 
@@ -124,14 +131,26 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     }
 
     private func mejorFormato(_ disp: AVCaptureDevice, ancho: Int, alto: Int, fps: Int) -> AVCaptureDevice.Format? {
+        // Los formatos del sensor vienen SIEMPRE en horizontal, aunque la
+        // captura se gire despues. Asi que se comparan lados largos con lados
+        // largos y cortos con cortos.
+        //
+        // Comparando en crudo, pedir 1080x1920 (vertical) daba distancia 1680
+        // contra el formato 1920x1080 y solo 1400 contra 1280x720: elegia 720p
+        // para una peticion de 1080p y luego lo escalaba. Vertical salia blando.
+        let pedidoLargo = max(ancho, alto)
+        let pedidoCorto = min(ancho, alto)
+
         var mejor: AVCaptureDevice.Format?
         var mejorPuntuacion = Int.max
         for f in disp.formats {
             let dim = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
             let soportaFps = f.videoSupportedFrameRateRanges.contains { $0.maxFrameRate >= Double(fps) }
             guard soportaFps else { continue }
+            let dimLargo = max(Int(dim.width), Int(dim.height))
+            let dimCorto = min(Int(dim.width), Int(dim.height))
             // Distancia a la resolucion pedida (preferimos igual o mayor).
-            let d = abs(Int(dim.width) - ancho) + abs(Int(dim.height) - alto)
+            let d = abs(dimLargo - pedidoLargo) + abs(dimCorto - pedidoCorto)
             if d < mejorPuntuacion {
                 mejorPuntuacion = d
                 mejor = f

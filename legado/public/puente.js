@@ -24,21 +24,56 @@
   }
 
   let primerFrame = true;
+  // Ultimo estado del iPhone (lentes, zoom, bateria...). Se guarda porque puede
+  // llegar antes de que el estudio este listo para pintarlo.
+  let ultimoEstado = null;
+
+  function pintarEstado(estado) {
+    if (!estado) return;
+    ultimoEstado = estado;
+    // Solo se pinta con la ruta nativa ya activa: antes, habilitarControles()
+    // aun no ha corrido y pintarEstadoMovil dejaria el desplegable a medias.
+    if (window.nexoNativoActivo && window.pintarEstadoMovil) {
+      window.pintarEstadoMovil(estado);
+    }
+  }
+
   const decodificador = new DecodificadorVideo({
     onFrame: (frame) => {
       // El procesador cierra el frame despues de usarlo (los VideoFrame son
       // recursos de GPU y hay que liberarlos cuanto antes).
       const proc = window.procesador;
       if (!proc) { frame.close(); return; }
+
+      // El frame va SIEMPRE antes de iniciar(). El bucle de dibujo mira
+      // `frameExterno` para decidir como reprogramarse, y si arranca sin
+      // ninguno se engancha al requestVideoFrameCallback del <video>, que en
+      // modo nativo no tiene fuente y no se dispara nunca: el bucle moria en la
+      // primera vuelta y el lienzo se quedaba en negro con el video llegando.
+      // Las medidas se leen ANTES de entregarlo: el procesador lo sube a la
+      // textura y lo cierra, y un VideoFrame cerrado mide 0x0.
+      const ancho = frame.displayWidth;
+      const alto = frame.displayHeight;
+
+      proc.ponerFrameExterno(frame);
+
       if (primerFrame) {
-        // Cuando llega el primer VideoFrame del iPhone: arrancamos el bucle de
-        // dibujo (si no lo estaba) y ocultamos la pantalla de espera de WebRTC.
+        // Primer VideoFrame del iPhone: la ruta nativa toma el mando. La marca
+        // le dice a viewer.js que no desmonte el estudio cuando la senalizacion
+        // WebRTC diga que no hay movil (por cable nunca lo hay: el iPhone no se
+        // registra en el WebSocket).
+        window.nexoNativoActivo = true;
         proc.iniciar();
         const esp = document.getElementById('espera');
         if (esp) esp.classList.add('oculto');
+        // Sin esto los controles siguen deshabilitados desde el arranque: por
+        // cable nadie llama a habilitarControles(), porque eso lo hacia la ruta
+        // WebRTC al recibir su pista de video.
+        if (window.habilitarControles) window.habilitarControles(true);
+        pintarEstado(ultimoEstado);
         primerFrame = false;
+        console.log('[puente] primer fotograma en pantalla: ' + ancho + 'x' + alto);
       }
-      proc.ponerFrameExterno(frame);
     },
     onError: (e) => console.error('[puente] decoder:', e.message || e),
   });
@@ -54,10 +89,30 @@
   window.nexo.onConexion((c) => {
     // Cuando la sesion se cierra, resetear el decodificador: la proxima vez
     // empezara por un nuevo fotograma clave.
-    if (c.evento === 'sesion-cerrada') decodificador.cerrar();
+    if (c.evento === 'sesion-cerrada') {
+      decodificador.cerrar();
+      // Se devuelve el mando a la ruta WebRTC y se vuelve a mostrar la espera.
+      window.nexoNativoActivo = false;
+      primerFrame = true;
+      const esp = document.getElementById('espera');
+      if (esp) esp.classList.remove('oculto');
+    }
+    // El iPhone publica lentes, zoom, bateria... por el transporte nativo, no
+    // por el WebSocket, asi que hay que llevarlo a mano a la interfaz.
+    if (c.evento === 'estado-movil') pintarEstado(c.datos);
+
     // Publicar el estado para que viewer.js pueda mostrarlo (icono en la UI).
     window.dispatchEvent(new CustomEvent('nexo:conexion', { detail: c }));
   });
+
+  // El iPhone publica su estado al conectar y luego solo cuando algo cambia. Si
+  // esa primera vez ocurrio antes de que existiera esta pagina, el proceso
+  // principal lo tiene guardado: se recupera al arrancar.
+  if (typeof window.nexo.estado === 'function') {
+    window.nexo.estado().then((e) => {
+      if (e && e.conexion && e.conexion.estadoMovil) pintarEstado(e.conexion.estadoMovil);
+    }).catch(() => {});
+  }
 
   console.log('[puente] activo (modo nativo: transporte Nexo → procesador)');
 })();
