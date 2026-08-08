@@ -602,14 +602,22 @@ function capturar() {
 }
 
 function empezarGrabacion() {
-  if (!flujo) return;
+  // Antes exigia `flujo`, el MediaStream de WebRTC. Por cable no existe —el
+  // video entra por el transporte nativo— y el boton no hacia nada de nada.
+  // Basta con que haya algo que grabar.
+  if (!flujo && !window.nexoNativoActivo) return;
 
   // Grabamos el lienzo, no el video original: asi el archivo lleva la
-  // correccion aplicada. El audio se toma del flujo del iPhone.
+  // correccion aplicada. Sin WebGL no hay lienzo y solo queda el flujo WebRTC,
+  // que por cable no existe: entonces no hay nada que grabar.
   const fuente = procesador.disponible ? elSalida.captureStream(60) : flujo;
+  if (!fuente) return;
+
+  // El audio viaja en el flujo del iPhone por WebRTC. Por cable todavia no hay
+  // sonido (Nexo Cam aun no lo captura), asi que se graba solo la imagen.
   const mezcla = new MediaStream([
     ...fuente.getVideoTracks(),
-    ...flujo.getAudioTracks(),
+    ...(flujo ? flujo.getAudioTracks() : []),
   ]);
 
   const formatos = ['video/mp4;codecs=avc1', 'video/webm;codecs=h264', 'video/webm;codecs=vp9', 'video/webm'];
