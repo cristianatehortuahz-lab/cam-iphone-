@@ -74,6 +74,13 @@ final class ModeloEstado: ObservableObject {
     private func aplicarCamara() {
         let (ancho, alto) = dimensiones()
         camara.configurar(lenteID: lenteActualID, ancho: ancho, alto: alto, fps: fps)
+
+        // Parar el anterior ANTES de sustituirlo. Sin esto, cada cambio de lente
+        // o de resolucion dejaba viva una VTCompressionSession: son sesiones del
+        // codificador por hardware, y al acumularse unas cuantas el video se
+        // ahoga hasta casi detenerse.
+        codificador?.detener()
+
         // (Re)crear el codificador. No se le dan medidas: las toma del primer
         // fotograma real de la camara, que es la unica fuente fiable.
         let cod = Codificador()

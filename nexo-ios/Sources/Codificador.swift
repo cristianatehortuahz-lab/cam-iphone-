@@ -25,6 +25,13 @@ final class Codificador {
 
     private static let codigoInicio = Data([0x00, 0x00, 0x00, 0x01])
 
+    // Red de seguridad: si alguien suelta un Codificador sin pararlo, su sesion
+    // de compresion se invalida igualmente en vez de quedarse ocupando el
+    // codificador por hardware.
+    deinit {
+        if let s = sesion { VTCompressionSessionInvalidate(s) }
+    }
+
     // La sesion no se crea aqui: hace falta ver un fotograma real primero.
     func iniciar(fps: Int32, bitrate: Int) {
         self.fps = fps
