@@ -12,7 +12,11 @@ echo   2. Arrastra el .ipa a Sideloadly, pon tu Apple ID y pulsa Start.
 echo.
 
 rem Intenta abrir Sideloadly desde las rutas habituales.
+rem El instalador normal lo deja en LOCALAPPDATA\Sideloadly, sin la carpeta
+rem "Programs" intermedia: sin esa ruta, el script decia que no estaba
+rem instalado aun teniendolo.
 set "SL="
+if exist "%LOCALAPPDATA%\Sideloadly\sideloadly.exe" set "SL=%LOCALAPPDATA%\Sideloadly\sideloadly.exe"
 if exist "%LOCALAPPDATA%\Programs\Sideloadly\Sideloadly.exe" set "SL=%LOCALAPPDATA%\Programs\Sideloadly\Sideloadly.exe"
 if exist "%ProgramFiles%\Sideloadly\Sideloadly.exe" set "SL=%ProgramFiles%\Sideloadly\Sideloadly.exe"
 
