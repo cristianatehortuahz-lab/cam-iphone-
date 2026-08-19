@@ -29,6 +29,13 @@ if defined SL (
 )
 
 echo.
+echo   Cuando Sideloadly termine, pulsa una tecla para restaurar el
+echo   driver USB de Apple (Sideloadly lo cambia por libusb y deja
+echo   a Nexo sin ver el iPhone por cable).
+echo.
+pause
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','%~dp0restaurar-driver.ps1'"
+echo.
 echo   Guia completa: INSTALAR-IPHONE.md
 echo.
 pause
