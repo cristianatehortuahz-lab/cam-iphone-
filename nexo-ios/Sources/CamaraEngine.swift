@@ -111,17 +111,26 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         // conexion y perder el angulo, y asignar uno no soportado se ignora en
         // silencio. Si esto no se aplica, la camara entrega apaisado.
         if let con = salida.connection(with: .video), #available(iOS 17.0, *) {
-            // El sensor de la frontal esta orientado al reves que el de las
-            // traseras: con los mismos 90 grados que enderezan la principal y la
-            // ultra gran angular, la frontal sale tumbada. 270 la deja derecha.
-            let angulo: CGFloat = (disp.position == .front) ? 270 : 90
-            if con.isVideoRotationAngleSupported(angulo) {
+            // El giro depende de lo que se PIDE, no es fijo. Antes se aplicaban
+            // 90 grados siempre: las traseras salian verticales aunque pidieras
+            // horizontal, y la frontal salia horizontal aunque pidieras vertical.
+            // La orientacion elegida en el estudio se ignoraba por completo.
+            //
+            // El sensor entrega apaisado, asi que para horizontal no hay que
+            // girar nada. Para vertical hay que girarlo, y la frontal necesita el
+            // sentido contrario a las traseras porque su sensor esta al reves.
+            let quiereVertical = alto > ancho
+            let preferidos: [CGFloat] = quiereVertical
+                ? (disp.position == .front ? [270, 90] : [90, 270])
+                : [0]
+
+            if let angulo = preferidos.first(where: { con.isVideoRotationAngleSupported($0) }) {
                 con.videoRotationAngle = angulo
-            } else if con.isVideoRotationAngleSupported(90) {
-                NSLog("Nexo: %.0f grados no soportado en esta lente; se usa 90", angulo)
-                con.videoRotationAngle = 90
+                NSLog("Nexo: giro %.0f grados (%@, %@)", angulo,
+                      disp.position == .front ? "frontal" : "trasera",
+                      quiereVertical ? "vertical" : "horizontal")
             } else {
-                NSLog("Nexo: la conexion no admite giro; se emitira apaisado")
+                NSLog("Nexo: ningun giro admitido; se emite tal cual sale del sensor")
             }
         }
 
