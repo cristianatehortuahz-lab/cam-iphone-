@@ -268,6 +268,23 @@
         background-position: calc(100% - 17px) 18px, calc(100% - 12px) 18px;
       }
 
+      .estadoCable {
+        margin: 0 0 14px;
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 14px;
+        line-height: 1.5;
+        background: #16202b;
+        border: 1px solid #24425f;
+        color: #cfe3f7;
+      }
+
+      .estadoCable.bien {
+        background: #14261a;
+        border-color: #2b6b3f;
+        color: #bff0cd;
+      }
+
       .pareja {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -399,6 +416,10 @@
         </div>
 
         <div id="espera">
+          <!-- Estado real de la ruta nativa. Lo rellena puente.js con lo que
+               sabe el proceso principal, en vez de dar por hecho que no hay
+               nada conectado: decia "conecta el iPhone" con el cable puesto. -->
+          <p id="estadoCable" class="estadoCable oculto"></p>
           <h2>Conecta el iPhone por el cable</h2>
           <ol>
             <li>Conecta el iPhone al PC con el cable USB-C.</li>

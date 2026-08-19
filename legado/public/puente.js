@@ -86,7 +86,41 @@
     decodificador.decodificar(datos, v.microsegundos, v.clave);
   });
 
+  // Traduce el estado del transporte nativo a algo util en la pantalla de
+  // espera. Antes siempre decia "conecta el iPhone por el cable" aunque el
+  // cable estuviera puesto y el movil detectado, que es justo cuando mas
+  // desorienta: el problema real suele ser que Nexo Cam no esta abierta o que
+  // le falta el permiso de camara (sin el, la app no abre su puerto).
+  function pintarEstadoCable(estado) {
+    const el = document.getElementById('estadoCable');
+    if (!el || !estado) return;
+    let texto = null;
+    let bien = false;
+
+    if (estado.conectado) {
+      texto = `iPhone conectado por ${estado.origen}. Recibiendo video…`;
+      bien = true;
+    } else if (estado.hayCable) {
+      texto =
+        'iPhone detectado por el cable, pero Nexo Cam no responde. ' +
+        'Abrela en el movil y dejala en pantalla. Si ya lo esta, revisa ' +
+        'Ajustes › Nexo › Camara: sin ese permiso la app no abre su puerto.';
+    } else if (estado.hayUsbmux === false) {
+      texto =
+        'No encuentro el servicio de Apple. Instala iTunes o Apple Devices, ' +
+        'o vuelve a conectar el iPhone.';
+    } else {
+      texto = 'Sin iPhone por cable. Conectalo con el USB-C y desbloquealo.';
+    }
+
+    el.textContent = texto;
+    el.classList.toggle('bien', bien);
+    el.classList.remove('oculto');
+  }
+
   window.nexo.onConexion((c) => {
+    if (c && c.estado) pintarEstadoCable(c.estado);
+
     // Cuando la sesion se cierra, resetear el decodificador: la proxima vez
     // empezara por un nuevo fotograma clave.
     if (c.evento === 'sesion-cerrada') {
@@ -110,6 +144,7 @@
   // principal lo tiene guardado: se recupera al arrancar.
   if (typeof window.nexo.estado === 'function') {
     window.nexo.estado().then((e) => {
+      if (e && e.conexion) pintarEstadoCable(e.conexion);
       if (e && e.conexion && e.conexion.estadoMovil) pintarEstado(e.conexion.estadoMovil);
     }).catch(() => {});
   }
