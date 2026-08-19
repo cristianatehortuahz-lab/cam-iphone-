@@ -20,8 +20,17 @@ final class Codificador {
     private var fps: Int32 = 30
     private var bitrate: Int = 12_000_000
 
+    // Medidas con las que se creo la sesion, que son las del buffer real de la
+    // camara. Se publican al PC para poder comprobar que VideoToolbox no escalo:
+    // si coinciden con el formato del sensor, no hubo deformacion posible.
+    var medidasActuales: (Int, Int)? { ancho > 0 && alto > 0 ? (Int(ancho), Int(alto)) : nil }
+
     // Entrega (datos Annex-B, marca de tiempo en microsegundos, esClave).
     var alFotograma: ((Data, UInt64, Bool) -> Void)?
+    // Aviso de que la sesion se ha (re)creado con medidas nuevas. La resolucion
+    // real no se conoce hasta el primer fotograma, asi que sin esto el estado
+    // que ve el PC se quedaba con las medidas anteriores tras cambiar de formato.
+    var alCambiarMedidas: (() -> Void)?
 
     private static let codigoInicio = Data([0x00, 0x00, 0x00, 0x01])
 
@@ -91,6 +100,7 @@ final class Codificador {
         if sesion == nil || w != ancho || h != alto {
             NSLog("Nexo: codificador a %dx%d (lo que entrega la camara)", w, h)
             crearSesion(ancho: w, alto: h)
+            alCambiarMedidas?()
         }
 
         guard let s = sesion else { return }

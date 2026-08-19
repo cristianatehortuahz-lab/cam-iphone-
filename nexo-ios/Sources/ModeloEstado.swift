@@ -94,6 +94,9 @@ final class ModeloEstado: ObservableObject {
         cod.alFotograma = { [weak self] datos, micros, clave in
             self?.sesion?.enviarVideo(datos, microsegundos: micros, esClave: clave)
         }
+        cod.alCambiarMedidas = { [weak self] in
+            Task { @MainActor in self?.publicarEstado() }
+        }
         cod.iniciar(fps: Int32(fps), bitrate: bitrate())
         codificador = cod
     }
@@ -207,8 +210,24 @@ final class ModeloEstado: ObservableObject {
             "fps": fps,
             "bateria": Int(UIDevice.current.batteryLevel * 100),
             "lentes": lentes.map { ["id": $0.id, "nombre": $0.nombre] },
+            // Lo que esta lente puede dar de verdad. El estudio llena su
+            // desplegable con esto: ofrecer una lista fija hacia que se pudieran
+            // elegir formatos imposibles, y el movil entregaba otra cosa.
+            "formatos": camara.formatosDisponibles().map {
+                ["largo": $0.largo, "corto": $0.corto, "fpsMax": $0.fpsMax]
+            },
         ]
-        sesion?.enviarEstado(estado)
+        // La resolucion de arriba es la PEDIDA. Estas dos son la realidad, y sin
+        // ellas un desajuste era invisible desde el PC: el estudio mostraba
+        // "1440p horizontal" mientras recibia 1944x2592 vertical.
+        var completo = estado
+        if let (w, h) = codificador?.medidasActuales {
+            completo["resolucionReal"] = "\(w)x\(h)"
+        }
+        if let (w, h) = camara.medidasFormatoActivo() {
+            completo["formatoSensor"] = "\(w)x\(h)"
+        }
+        sesion?.enviarEstado(completo)
     }
 
     // --- Cambios desde la propia interfaz del iPhone ------------------------

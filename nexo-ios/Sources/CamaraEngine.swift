@@ -7,6 +7,15 @@ import CoreMedia
 // controles manuales (zoom, exposicion, ISO, foco). Entrega cada fotograma como
 // CVPixelBuffer al codificador.
 
+// Una resolucion que la lente puede entregar de verdad, en lados largo/corto
+// (los formatos del sensor vienen siempre apaisados). El estudio deriva de aqui
+// la pareja vertical/horizontal.
+struct FormatoInfo: Equatable {
+    let largo: Int
+    let corto: Int
+    let fpsMax: Int
+}
+
 struct LenteInfo: Identifiable, Equatable {
     let id: String          // identificador unico del AVCaptureDevice
     let nombre: String      // nombre amable para la interfaz
@@ -137,6 +146,38 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         alEstado?()
     }
 
+    // Resoluciones que la lente ACTUAL puede dar, sin repetir y de mayor a
+    // menor. El estudio llena su desplegable con esto en vez de con una lista
+    // fija: cada lente tiene formatos distintos, y ofrecer imposibles hacia que
+    // se eligiera algo que el sensor no podia dar, entregando otra cosa sin
+    // avisar.
+    func formatosDisponibles() -> [FormatoInfo] {
+        guard let disp = dispositivoActual else { return [] }
+        var porClave: [String: FormatoInfo] = [:]
+        for f in disp.formats {
+            let dim = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
+            let largo = max(Int(dim.width), Int(dim.height))
+            let corto = min(Int(dim.width), Int(dim.height))
+            let fpsMax = Int(f.videoSupportedFrameRateRanges.map { $0.maxFrameRate }.max() ?? 0)
+            guard fpsMax > 0 else { continue }
+            let clave = "\(largo)x\(corto)"
+            // Con varios formatos del mismo tamano nos quedamos con el que mas
+            // fps admite: es el que menos limita al usuario.
+            if let previo = porClave[clave], previo.fpsMax >= fpsMax { continue }
+            porClave[clave] = FormatoInfo(largo: largo, corto: corto, fpsMax: fpsMax)
+        }
+        return porClave.values.sorted { $0.largo > $1.largo }
+    }
+
+    // Medidas del formato de sensor activo. Sirven para comprobar que
+    // VideoToolbox no escalo: si lo codificado coincide con esto (girado o no),
+    // no hubo deformacion posible.
+    func medidasFormatoActivo() -> (Int, Int)? {
+        guard let disp = dispositivoActual else { return nil }
+        let dim = CMVideoFormatDescriptionGetDimensions(disp.activeFormat.formatDescription)
+        return (Int(dim.width), Int(dim.height))
+    }
+
     private func dispositivoPorID(_ id: String?) -> AVCaptureDevice? {
         guard let id = id else { return nil }
         let todos = AVCaptureDevice.DiscoverySession(
@@ -165,8 +206,17 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             guard soportaFps else { continue }
             let dimLargo = max(Int(dim.width), Int(dim.height))
             let dimCorto = min(Int(dim.width), Int(dim.height))
+
+            // La PROPORCION manda sobre el tamano. Sin esto, pidiendo 2560x1440
+            // (16:9) el formato 4:3 del sensor (2592x1944) puntuaba 536 y el
+            // 16:9 de verdad (3840x2160) puntuaba 2000: ganaba el 4:3 y el
+            // encuadre no era el pedido, sin ningun aviso.
+            let propPedida = Double(pedidoLargo) / Double(pedidoCorto)
+            let propFormato = Double(dimLargo) / Double(dimCorto)
+            let castigoProp = Int(abs(propPedida - propFormato) * 10_000)
+
             // Distancia a la resolucion pedida (preferimos igual o mayor).
-            let d = abs(dimLargo - pedidoLargo) + abs(dimCorto - pedidoCorto)
+            let d = castigoProp + abs(dimLargo - pedidoLargo) + abs(dimCorto - pedidoCorto)
             if d < mejorPuntuacion {
                 mejorPuntuacion = d
                 mejor = f
