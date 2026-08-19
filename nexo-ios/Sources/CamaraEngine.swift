@@ -111,10 +111,17 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         // conexion y perder el angulo, y asignar uno no soportado se ignora en
         // silencio. Si esto no se aplica, la camara entrega apaisado.
         if let con = salida.connection(with: .video), #available(iOS 17.0, *) {
-            if con.isVideoRotationAngleSupported(90) {
+            // El sensor de la frontal esta orientado al reves que el de las
+            // traseras: con los mismos 90 grados que enderezan la principal y la
+            // ultra gran angular, la frontal sale tumbada. 270 la deja derecha.
+            let angulo: CGFloat = (disp.position == .front) ? 270 : 90
+            if con.isVideoRotationAngleSupported(angulo) {
+                con.videoRotationAngle = angulo
+            } else if con.isVideoRotationAngleSupported(90) {
+                NSLog("Nexo: %.0f grados no soportado en esta lente; se usa 90", angulo)
                 con.videoRotationAngle = 90
             } else {
-                NSLog("Nexo: la conexion no admite giro de 90 grados; se emitira apaisado")
+                NSLog("Nexo: la conexion no admite giro; se emitira apaisado")
             }
         }
 
