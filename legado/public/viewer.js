@@ -57,6 +57,7 @@ let ultimoInforme = null;
 let verZonas = false;
 let comparando = false;
 let firmaLentes = '';
+let firmaFormatos = '';
 
 const procesador = new ProcesadorImagen(elVideo);
 // El puente Nexo Desktop -> Electron necesita alcanzar el procesador para
@@ -86,6 +87,10 @@ const ZONAS_UI = {
   '1:1': [],
   '16:9': [{ arriba: 0.88, alto: 0.12, izq: 0, ancho: 1 }],
 };
+
+// Nombre corto por lado menor, para etiquetar las resoluciones que publica el
+// movil sin inventarnos numeros.
+const ETIQUETAS_RES = { 720: '720p', 1080: '1080p', 1440: '1440p', 1944: '4:3 alto', 2160: '4K' };
 
 // Cada fila del panel de imagen. Los limites (min/max) NO se repiten aqui: se
 // leen de RANGOS (procesador.js), que es la fuente unica que ademas usa el
@@ -130,6 +135,7 @@ function habilitarControles(activos) {
     // estado del iPhone se considera "sin cambios" y el desplegable se queda
     // con el texto de relleno para siempre.
     firmaLentes = '';
+    firmaFormatos = '';
     for (const g of ['grupoZoom', 'grupoExposicion', 'grupoEnfoque']) $(g).classList.add('oculto');
   }
 }
@@ -280,6 +286,50 @@ function conectar() {
   };
 }
 
+// Llena el desplegable de resolucion con lo que la lente puede dar de verdad.
+// Antes era una lista fija igual para las tres lentes, asi que se podia elegir
+// un formato imposible y el movil entregaba otra cosa sin avisar.
+//
+// Mismo criterio que el selector de lentes: solo se rehace si cambio de verdad,
+// para no cerrar el desplegable mientras el usuario lo tiene abierto.
+function pintarFormatos(msg) {
+  const formatos = msg.formatos || [];
+  if (!formatos.length) return; // sin datos del movil se deja la lista fija
+
+  const fps = Number(elFps.value) || 30;
+  // Cada formato del sensor da dos opciones: en vertical y en horizontal.
+  const opciones = [];
+  for (const f of formatos) {
+    if (f.fpsMax && f.fpsMax < fps) continue; // no llega a esa fluidez
+    const etiqueta = ETIQUETAS_RES[f.corto] || `${f.corto}p`;
+    opciones.push({ valor: `${f.corto}x${f.largo}`, texto: `${etiqueta} vertical` });
+    opciones.push({ valor: `${f.largo}x${f.corto}`, texto: `${etiqueta} horizontal` });
+  }
+  if (!opciones.length) return;
+
+  const firma = opciones.map((o) => o.valor).join('|');
+  if (firma === firmaFormatos) {
+    if (msg.resolucion && document.activeElement !== elResolucion) {
+      elResolucion.value = msg.resolucion;
+    }
+    return;
+  }
+  firmaFormatos = firma;
+
+  const seleccion = msg.resolucion || elResolucion.value;
+  elResolucion.innerHTML = '';
+  for (const o of opciones) {
+    const op = document.createElement('option');
+    op.value = o.valor;
+    op.textContent = o.texto;
+    elResolucion.appendChild(op);
+  }
+  // Si lo que estaba elegido ya no existe en esta lente, se queda la primera.
+  if (seleccion && opciones.some((o) => o.valor === seleccion)) {
+    elResolucion.value = seleccion;
+  }
+}
+
 function pintarEstadoMovil(msg) {
   const lentes = msg.lentes || [];
   // El iPhone publica su estado cada 2 s. Rehacer la lista cada vez cerraria el
@@ -299,6 +349,8 @@ function pintarEstadoMovil(msg) {
   } else if (msg.lenteActual && document.activeElement !== elLente) {
     elLente.value = msg.lenteActual;
   }
+
+  pintarFormatos(msg);
 
   if (msg.hint && document.activeElement !== elHint) elHint.value = msg.hint;
 
@@ -658,7 +710,12 @@ function pararGrabacion() {
 
 elLente.addEventListener('change', () => ordenar('cambiar-lente', elLente.value));
 elResolucion.addEventListener('change', () => ordenar('cambiar-resolucion', elResolucion.value));
-elFps.addEventListener('change', () => ordenar('cambiar-fps', elFps.value));
+elFps.addEventListener('change', () => {
+  ordenar('cambiar-fps', elFps.value);
+  // La lista de resoluciones depende de los fps: a 60 hay menos formatos. Se
+  // olvida la firma para que el proximo estado del movil la rehaga.
+  firmaFormatos = '';
+});
 elHint.addEventListener('change', () => ordenar('hint', elHint.value));
 
 elLinterna.addEventListener('click', () => {
