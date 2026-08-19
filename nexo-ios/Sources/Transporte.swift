@@ -128,14 +128,18 @@ final class ServidorCable {
         do {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
-            // Escucha SOLO en loopback (127.0.0.1). Por el cable, usbmux entrega
-            // las conexiones del PC como locales; por WiFi el iPhone se conecta
-            // saliente, asi que este listener no hace falta que sea accesible
-            // desde la red. Cerrar la red aqui elimina un agujero de privacidad
-            // sin exigir claves ni configuracion al usuario.
-            params.requiredLocalEndpoint = NWEndpoint.hostPort(
-                host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: PUERTO_CABLE)!
-            )
+
+            // NO se usa requiredLocalEndpoint para atarlo a 127.0.0.1. Esa
+            // propiedad es para fijar el extremo local de una CONEXION saliente;
+            // en un listener, combinada con el puerto de NWListener(using:on:),
+            // deja al listener en estado .failed y el puerto nunca se abre. Se
+            // veia como que el cable no funcionaba: la camara arrancaba, la app
+            // decia "Listo para transmitir" y el PC no podia conectarse.
+            //
+            // La privacidad se mantiene igual: el newConnectionHandler de abajo
+            // ya rechaza toda conexion cuyo extremo remoto no sea local, que es
+            // lo que de verdad cierra la puerta. Por el cable, usbmux entrega
+            // las conexiones del PC como locales, asi que pasan.
             listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: PUERTO_CABLE)!)
             listener?.newConnectionHandler = { [weak self] conexion in
                 guard let self = self else { return }
@@ -158,7 +162,7 @@ final class ServidorCable {
                     NSLog("Nexo: escuchando por cable (loopback) en el puerto %d", PUERTO_CABLE)
                 case .failed(let e):
                     NSLog("Nexo: el puerto de cable fallo: %@", "\(e)")
-                    self?.alFalloEscucha?("No se pudo abrir el puerto del cable. Revisa Ajustes › Nexo › Red local.")
+                    self?.alFalloEscucha?("Puerto del cable fallido: \(e). Revisa Ajustes › Nexo › Red local.")
                 case .cancelled:
                     break
                 default:
