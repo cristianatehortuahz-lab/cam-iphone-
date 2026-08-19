@@ -8,6 +8,7 @@ import AVFoundation
 struct VistaPrincipal: View {
     @StateObject private var modelo = ModeloEstado()
     @State private var permisoConcedido = false
+    @State private var permisoDenegado = false
 
     var body: some View {
         ZStack {
@@ -16,6 +17,35 @@ struct VistaPrincipal: View {
             if permisoConcedido {
                 VistaPrevia(sesion: modelo.sesionCamara)
                     .ignoresSafeArea()
+            } else if permisoDenegado {
+                // Sin camara la app no hace NADA: preparar() es quien arranca el
+                // servidor del cable, asi que el PC ni siquiera puede conectarse
+                // y desde el otro lado parece un problema de cable. Antes esto
+                // era solo una linea de texto en la cabecera; ahora se explica y
+                // se ofrece el camino, porque si el permiso se denego una vez
+                // iOS ya no vuelve a preguntar.
+                VStack(spacing: 16) {
+                    Image(systemName: "video.slash.fill")
+                        .font(.system(size: 44))
+                        .foregroundColor(.orange)
+                    Text("Nexo necesita la camara")
+                        .font(.title3).bold().foregroundColor(.white)
+                    Text("Sin este permiso no se puede transmitir y el PC no podra conectarse por el cable.")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                    Button("Abrir Ajustes") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    .font(.headline)
+                    .padding(.horizontal, 22).padding(.vertical, 12)
+                    .background(Color(red: 0.24, green: 0.61, blue: 1.0))
+                    .foregroundColor(.black)
+                    .cornerRadius(10)
+                }
+                .padding(32)
             }
 
             VStack {
@@ -120,6 +150,7 @@ struct VistaPrincipal: View {
                 UIApplication.shared.isIdleTimerDisabled = true // no bloquear la pantalla en directo
                 modelo.preparar()
             } else {
+                permisoDenegado = true
                 modelo.mensaje = "Sin permiso de camara. Actívalo en Ajustes."
             }
         }
