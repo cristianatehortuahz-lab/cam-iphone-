@@ -54,6 +54,13 @@ final class ModeloEstado: ObservableObject {
             Task { @MainActor in self?.adoptarSesion(ses, origen: "cable") }
         }
 
+        // Si el puerto del cable no llega a abrirse, que se vea en pantalla: sin
+        // esto la app decia "Listo para transmitir" con la camara funcionando y
+        // el PC no podia conectarse, sin ninguna pista de por que.
+        servidorCable.alFalloEscucha = { [weak self] motivo in
+            Task { @MainActor in self?.mensaje = motivo }
+        }
+
         buscador.alCambio = { [weak self] lista in
             Task { @MainActor in self?.pcsWifi = lista }
         }

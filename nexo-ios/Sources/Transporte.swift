@@ -115,6 +115,10 @@ final class ServidorCable {
     private var listener: NWListener?
     private let capacidades: [String: Any]
     var alSesion: ((SesionNexo) -> Void)?
+    // Se avisa si el puerto no llega a abrirse. Sin esto el fallo solo iba a un
+    // NSLog invisible: la camara se veia bien, la app decia "Listo para
+    // transmitir" y desde el PC parecia un problema de cable.
+    var alFalloEscucha: ((String) -> Void)?
 
     init(capacidades: [String: Any]) {
         self.capacidades = capacidades
@@ -146,10 +150,25 @@ final class ServidorCable {
                 self.alSesion?(ses)
                 ses.iniciar()
             }
+            // start() es asincrono: si el bind falla, no lo sabremos por el
+            // catch sino aqui. Pasa, por ejemplo, sin permiso de Red local.
+            listener?.stateUpdateHandler = { [weak self] estado in
+                switch estado {
+                case .ready:
+                    NSLog("Nexo: escuchando por cable (loopback) en el puerto %d", PUERTO_CABLE)
+                case .failed(let e):
+                    NSLog("Nexo: el puerto de cable fallo: %@", "\(e)")
+                    self?.alFalloEscucha?("No se pudo abrir el puerto del cable. Revisa Ajustes › Nexo › Red local.")
+                case .cancelled:
+                    break
+                default:
+                    break
+                }
+            }
             listener?.start(queue: .global())
-            NSLog("Nexo: escuchando por cable (loopback) en el puerto %d", PUERTO_CABLE)
         } catch {
             NSLog("Nexo: no se pudo abrir el puerto de cable: %@", error.localizedDescription)
+            alFalloEscucha?("No se pudo abrir el puerto del cable: \(error.localizedDescription)")
         }
     }
 
