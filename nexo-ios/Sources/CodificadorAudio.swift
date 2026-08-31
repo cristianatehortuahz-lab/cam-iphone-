@@ -129,18 +129,32 @@ final class CodificadorAudio {
 
     // Cabecera ADTS de 7 bytes (sin CRC) para un paquete AAC-LC.
     private func cabeceraADTS(longitud: Int) -> Data {
-        let indiceTasa = indiceFrecuencia(tasa)
-        let total = longitud + 7
+        // Cada byte se calcula por separado y con el tipo escrito: juntarlo todo
+        // en una expresion hacia que el compilador se rindiera con
+        // "unable to type-check this expression in reasonable time".
+        let indiceTasa: UInt8 = indiceFrecuencia(tasa)
+        let numCanales: UInt8 = UInt8(canales)
+        let total: Int = longitud + 7
+        let perfil: UInt8 = 1                          // AAC-LC
+
+        let byte2Alto: UInt8 = perfil << 6
+        let byte2Medio: UInt8 = (indiceTasa & 0x0F) << 2
+        let byte2Bajo: UInt8 = (numCanales >> 2) & 0x01
+
+        let byte3Alto: UInt8 = (numCanales & 0x03) << 6
+        let byte3Bajo: UInt8 = UInt8((total >> 11) & 0x03)
+
+        let byte4: UInt8 = UInt8((total >> 3) & 0xFF)
+        let byte5Alto: UInt8 = UInt8(total & 0x07) << 5
+
         var c = Data(count: 7)
         c[0] = 0xFF                                    // sincronismo
-        c[1] = 0xF1                                    // MPEG-4, sin CRC
-        c[2] = UInt8(((1 & 0x3) << 6)                  // perfil AAC-LC
-                     | ((indiceTasa & 0xF) << 2)
-                     | ((UInt8(canales) >> 2) & 0x1))
-        c[3] = UInt8(((UInt8(canales) & 0x3) << 6) | UInt8((total >> 11) & 0x3))
-        c[4] = UInt8((total >> 3) & 0xFF)
-        c[5] = UInt8(((total & 0x7) << 5) | 0x1F)
-        c[6] = 0xFC
+        c[1] = 0xF1                                    // MPEG-4, capa 0, sin CRC
+        c[2] = byte2Alto | byte2Medio | byte2Bajo
+        c[3] = byte3Alto | byte3Bajo
+        c[4] = byte4
+        c[5] = byte5Alto | 0x1F                        // relleno de buffer
+        c[6] = 0xFC                                    // un solo bloque por trama
         return c
     }
 

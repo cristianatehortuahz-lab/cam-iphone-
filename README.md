@@ -35,16 +35,30 @@ Proyecto en construccion por fases. Cada fase deja algo funcional:
 - [x] **F4** Nexo Cam (app Swift: camara, codificador H.264, transporte, interfaz) — **compila en la nube**
 - [x] **F5** Compilacion e instalacion (GitHub Actions produce el .ipa; guia de Sideloadly en INSTALAR-IPHONE.md)
 - [x] **F3.5** Integracion (transporte cableado + puente al motor de color + protocolo con flag de clave + iPhone solo loopback)
-- [ ] **F6** Camara virtual (integrar OBS) y acabado
+- [x] **F6** Salida a OBS (el video nativo llega a la fuente de navegador) y audio
+- [ ] **F7** Acabado: instalador, ajustes persistentes y guia de uso
 
 La app de iPhone ya **compila** en macOS via GitHub Actions y genera un `.ipa`
 instalable. Para ponerlo en el iPhone por cable: ver **[INSTALAR-IPHONE.md](INSTALAR-IPHONE.md)**.
+
+Para llegar a TikTok o Zoom, la cadena es: Nexo Desktop recibe el video por el
+cable, la fuente de navegador de OBS lo toma de `http://localhost:8080/obs`, y la
+camara virtual de OBS lo publica al sistema. No hace falta instalar ningun driver.
+
+Una prueba automatica recorre todas las combinaciones de lente y formato contra
+el iPhone real y comprueba orientacion, proporcion, resolucion, fluidez,
+fotogramas clave y que no haya escalado:
+
+```bash
+node herramientas/verificar-formatos.js
+```
 
 ## Estructura
 
 ```
 nexo-desktop/   App de escritorio (Electron)
-nexo-ios/       App de iPhone (Swift / SwiftUI)
+nexo-ios/        App de iPhone (Swift / SwiftUI)
+herramientas/   Pruebas contra el iPhone real
 recursos/       Logo maestro e iconos generados
 legado/         Version anterior por navegador, como modo de reserva
 ```
