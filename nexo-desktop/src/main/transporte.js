@@ -35,6 +35,11 @@ class Sesion extends EventEmitter {
     this.origen = origen; // 'cable' | 'wifi'
     this.capacidadesMovil = null;
     this.ultimoLatido = Date.now();
+    // Diferencia entre el reloj del movil y el del PC, en milisegundos. Null
+    // hasta la primera medida buena.
+    this.desfase = null;
+    this.mejorIdaVuelta = null;
+    this.ultimaIdaVuelta = null;
     this.cerrada = false;
     this.finEmitido = false;
     this.autenticada = !exigirClave;
@@ -117,6 +122,7 @@ class Sesion extends EventEmitter {
         break;
       case 'latido':
         this.ultimoLatido = Date.now();
+        this.#medirDesfase(t.obj);
         this.emit('latido');
         break;
     }
@@ -128,12 +134,39 @@ class Sesion extends EventEmitter {
     this.socket.write(proto.codificarJson(proto.TRAMA.CONTROL, orden));
   }
 
+  // El latido lleva la hora del PC. El movil la devuelve junto a la suya, y con
+  // la ida y vuelta se calcula el desfase entre relojes al estilo NTP.
+  //
+  // Hace falta para alinear varias camaras: cada iPhone marca sus fotogramas con
+  // SU reloj, asi que sin esto no hay forma de saber que fotograma de una
+  // corresponde a cual de otra. El tipo LATIDO ya existia y viajaba vacio; el
+  // comentario del protocolo decia que medía la latencia y no medía nada.
   enviarLatido() {
     if (this.cerrada) return;
     try {
-      this.socket.write(proto.codificarTrama(proto.TRAMA.LATIDO));
+      this.socket.write(proto.codificarJson(proto.TRAMA.LATIDO, { pc: Date.now() }));
     } catch {
       /* socket cerrandose */
+    }
+  }
+
+  // Respuesta del movil: {pc: lo que le mandamos, movil: su reloj}.
+  #medirDesfase(obj) {
+    if (!obj || typeof obj.pc !== 'number' || typeof obj.movil !== 'number') return;
+    const ahora = Date.now();
+    const ida = ahora - obj.pc;
+    if (ida < 0 || ida > 2000) return; // respuesta absurda o muy tardia
+
+    // Se reparte el viaje a partes iguales, que por cable es mas que suficiente.
+    const desfase = obj.movil + ida / 2 - ahora;
+    this.ultimaIdaVuelta = ida;
+
+    // Nos quedamos con la medida de MENOR ida y vuelta: es la menos contaminada
+    // por un pico de la red o del propio movil.
+    if (this.mejorIdaVuelta === null || ida < this.mejorIdaVuelta) {
+      this.mejorIdaVuelta = ida;
+      this.desfase = Math.round(desfase);
+      this.emit('desfase', { desfase: this.desfase, idaVuelta: ida });
     }
   }
 

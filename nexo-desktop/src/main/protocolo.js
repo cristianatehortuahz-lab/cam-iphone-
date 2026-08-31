@@ -19,7 +19,12 @@
 //     2 AUDIO    AAC (u64 tiempo + u8 flags + datos)
 //     3 ESTADO   JSON: lente, zoom, ISO, bateria, temperatura del movil
 //     4 CONTROL  JSON: ordenes del PC al movil (lente, zoom, foco, linterna...)
-//     5 LATIDO   vacio; mantiene viva la conexion y mide la latencia
+//     5 LATIDO   JSON: mantiene viva la conexion y mide el desfase de relojes.
+//                El PC manda {pc: <su reloj>} y el movil responde
+//                {pc: <lo que recibio>, movil: <su reloj>}. Con la ida y vuelta
+//                se calcula cuanto adelanta o atrasa cada iPhone, que es lo que
+//                permite alinear varias camaras al montar. Una carga vacia
+//                sigue valiendo como simple senal de vida.
 
 const MAGIA = Buffer.from('NEXO1', 'ascii');
 const VERSION = 1;
@@ -164,7 +169,7 @@ class Analizador {
         // fotograma en vuelo mantendria vivo todo el bloque acumulado.
         datos: Buffer.from(carga.subarray(9)),
       });
-    } else if (tipo === TRAMA.ESTADO || tipo === TRAMA.CONTROL) {
+    } else if (tipo === TRAMA.ESTADO || tipo === TRAMA.CONTROL || tipo === TRAMA.LATIDO) {
       let obj = {};
       try {
         obj = JSON.parse(carga.toString('utf8'));

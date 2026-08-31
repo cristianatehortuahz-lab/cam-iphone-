@@ -36,6 +36,17 @@ final class SesionNexo {
             self?.alListo?(caps)
         }
         analizador.alControl = { [weak self] orden in self?.alControl?(orden) }
+
+        // Se devuelve la marca del PC junto a la nuestra. Con la ida y vuelta,
+        // el PC calcula cuanto adelanta o atrasa el reloj de este iPhone
+        // respecto al suyo, que es lo que permite alinear varias camaras al
+        // montar: cada movil marca sus fotogramas con SU reloj.
+        analizador.alLatido = { [weak self] obj in
+            guard let self = self else { return }
+            var respuesta: [String: Any] = ["movil": Date().timeIntervalSince1970 * 1000]
+            if let pc = obj["pc"] { respuesta["pc"] = pc }
+            self.enviar(ProtocoloNexo.codificarJson(.latido, respuesta))
+        }
         // Un flujo que incumple el protocolo no se recupera: se corta la conexion
         // en vez de seguir acumulando.
         analizador.alError = { [weak self] mensaje in

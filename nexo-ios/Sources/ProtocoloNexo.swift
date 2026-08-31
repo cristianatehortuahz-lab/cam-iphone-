@@ -8,6 +8,10 @@ import Foundation
 //   Media:   u64-BE tiempo (us) | u8 flags (bit 0 = clave) | datos
 //
 //   Tipos:   1 VIDEO  2 AUDIO  3 ESTADO  4 CONTROL  5 LATIDO
+//
+//   El LATIDO lleva JSON: el PC manda {pc: <su reloj>} y este iPhone responde
+//   {pc, movil: <el suyo>}. Con eso el PC mide el desfase entre relojes, que es
+//   lo que permite alinear varias camaras al montar.
 
 enum TipoTrama: UInt8 {
     case video = 1
@@ -94,7 +98,9 @@ final class AnalizadorNexo {
 
     var alSaludo: ((_ version: UInt8, _ capacidades: [String: Any]) -> Void)?
     var alControl: ((_ orden: [String: Any]) -> Void)?
-    var alLatido: (() -> Void)?
+    // Lleva la carga del latido: el PC manda su reloj y esperamos devolverlo
+    // junto al nuestro, para que pueda medir el desfase entre ambos.
+    var alLatido: (([String: Any]) -> Void)?
     var alError: ((String) -> Void)?
 
     func alimentar(_ trozo: Data) {
@@ -167,7 +173,8 @@ final class AnalizadorNexo {
                 alControl?(obj)
             }
         case .latido:
-            alLatido?()
+            let obj = (try? JSONSerialization.jsonObject(with: carga)) as? [String: Any]
+            alLatido?(obj ?? [:])
         default:
             break // el iPhone es el emisor: no espera video/audio/estado entrante
         }
