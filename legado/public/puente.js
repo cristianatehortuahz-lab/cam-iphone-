@@ -192,7 +192,7 @@
   }
 
   window.nexo.onConexion((c) => {
-    if (c && c.estado) pintarEstadoCable(c.estado);
+    if (c && c.estado) { pintarEstadoCable(c.estado); pintarCamaras(c.estado); }
 
     // Cuando la sesion se cierra, resetear el decodificador: la proxima vez
     // empezara por un nuevo fotograma clave.
@@ -217,10 +217,79 @@
   // principal lo tiene guardado: se recupera al arrancar.
   if (typeof window.nexo.estado === 'function') {
     window.nexo.estado().then((e) => {
-      if (e && e.conexion) pintarEstadoCable(e.conexion);
+      if (e && e.conexion) { pintarEstadoCable(e.conexion); pintarCamaras(e.conexion); }
       if (e && e.conexion && e.conexion.estadoMovil) pintarEstado(e.conexion.estadoMovil);
     }).catch(() => {});
   }
+
+  // --- Camaras y grabacion ---------------------------------------------
+  //
+  // La grabacion ya no vive aqui: la hace el proceso principal, que copia los
+  // fotogramas a disco sin recodificar y sigue aunque la ventana este
+  // minimizada. Esto es solo el mando.
+  const elTira = document.getElementById('tiraCamaras');
+  const elGrupoCamaras = document.getElementById('grupoCamaras');
+  const elEstadoGrab = document.getElementById('estadoGrabacion');
+
+  function pintarCamaras(estado) {
+    if (!elTira || !estado || !estado.camaras) return;
+    const camaras = estado.camaras;
+    // Con una sola camara no hay nada que elegir.
+    if (elGrupoCamaras) elGrupoCamaras.classList.toggle('oculto', camaras.length < 2);
+
+    const firma = camaras.map((c) => c.id + ':' + c.principal).join('|');
+    if (firma === elTira.dataset.firma) return;
+    elTira.dataset.firma = firma;
+
+    elTira.innerHTML = '';
+    camaras.forEach((c, i) => {
+      const b = document.createElement('button');
+      const modelo = (c.estadoMovil && c.estadoMovil.resolucionReal) || '';
+      b.textContent = `Camara ${i + 1}${modelo ? ' · ' + modelo : ''}`;
+      b.classList.toggle('activa', c.principal);
+      b.addEventListener('click', () => window.nexo.elegirPrincipal(c.id));
+      elTira.appendChild(b);
+    });
+  }
+
+  function pintarGrabacion(g) {
+    if (!elEstadoGrab || !g) return;
+    const boton = document.getElementById('grabar');
+    if (g.grabando) {
+      const m = Math.floor(g.segundos / 60);
+      const seg = String(g.segundos % 60).padStart(2, '0');
+      elEstadoGrab.textContent = `Grabando ${g.pistas.length} camara(s) · ${m}:${seg}`;
+      elEstadoGrab.classList.add('grabando');
+      if (boton) { boton.textContent = 'Detener'; boton.classList.add('activo'); }
+    } else {
+      elEstadoGrab.textContent = g.ffmpeg
+        ? 'Sin grabar'
+        : 'Sin grabar · sin ffmpeg se guardara el flujo crudo';
+      elEstadoGrab.classList.remove('grabando');
+      if (boton) { boton.textContent = 'Grabar'; boton.classList.remove('activo'); }
+    }
+  }
+
+  // El estudio pide grabar y el proceso principal lo hace.
+  window.nexoGrabar = async () => {
+    const estado = await window.nexo.estadoGrabacion();
+    const r = estado.grabando ? await window.nexo.pararGrabacion() : await window.nexo.grabar();
+    if (!r.ok && r.motivo) console.warn('[puente] grabacion:', r.motivo);
+    pintarGrabacion(await window.nexo.estadoGrabacion());
+    return r;
+  };
+
+  if (typeof window.nexo.onGrabacion === 'function') window.nexo.onGrabacion(pintarGrabacion);
+
+  // El cronometro lo lleva el proceso principal; aqui solo se refresca.
+  setInterval(async () => {
+    try { pintarGrabacion(await window.nexo.estadoGrabacion()); } catch {}
+  }, 1000);
+
+  const btnCarpeta = document.getElementById('carpetaBtn');
+  if (btnCarpeta) btnCarpeta.addEventListener('click', () => window.nexo.elegirCarpeta());
+  const btnAbrir = document.getElementById('abrirCarpetaBtn');
+  if (btnAbrir) btnAbrir.addEventListener('click', () => window.nexo.abrirCarpeta());
 
   console.log('[puente] activo (modo nativo: transporte Nexo → procesador)');
 })();

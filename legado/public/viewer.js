@@ -834,7 +834,14 @@ elDatos.addEventListener('click', () => {
 });
 
 elFoto.addEventListener('click', capturar);
-elGrabar.addEventListener('click', () => (grabadora ? pararGrabacion() : empezarGrabacion()));
+elGrabar.addEventListener('click', () => {
+  // Con la ruta nativa graba el proceso principal: copia los fotogramas a disco
+  // sin recodificar, graba TODAS las camaras y sigue con la ventana minimizada.
+  // La grabacion por navegador se queda solo para la ruta WebRTC, que no tiene
+  // otra forma de llegar al video.
+  if (window.nexoGrabar) return window.nexoGrabar();
+  return grabadora ? pararGrabacion() : empezarGrabacion();
+});
 
 elPantalla.addEventListener('click', () => {
   if (document.fullscreenElement) document.exitFullscreen();

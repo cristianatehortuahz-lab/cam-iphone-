@@ -285,6 +285,34 @@
         color: #bff0cd;
       }
 
+      .tiraCamaras {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .tiraCamaras button {
+        text-align: left;
+        font-size: 13px;
+        padding: 8px 11px;
+      }
+
+      .tiraCamaras button.activa {
+        border-color: var(--acento);
+        color: var(--acento);
+      }
+
+      .pista {
+        font-size: 12px;
+        color: var(--tenue);
+        line-height: 1.5;
+        margin: 0;
+      }
+
+      .pista.grabando {
+        color: #ff8f8f;
+      }
+
       .pareja {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -494,6 +522,23 @@
           <div class="pareja">
             <button id="compararImagen">Comparar</button>
             <button id="reiniciarImagen">Restablecer</button>
+          </div>
+        </div>
+
+        <!-- Camaras conectadas. Solo aparece con la ruta nativa y mas de una:
+             en el resto de casos no hay nada que elegir. -->
+        <div class="grupo oculto" id="grupoCamaras">
+          <h3>Camaras</h3>
+          <div id="tiraCamaras" class="tiraCamaras"></div>
+          <p class="pista">Se graban todas; aqui eliges cual se ve.</p>
+        </div>
+
+        <div class="grupo" id="grupoGrabacion">
+          <h3>Grabacion</h3>
+          <div id="estadoGrabacion" class="pista">Sin grabar</div>
+          <div class="pareja">
+            <button id="carpetaBtn">Carpeta…</button>
+            <button id="abrirCarpetaBtn">Abrir</button>
           </div>
         </div>
 

@@ -191,6 +191,10 @@ class Conexion extends EventEmitter {
       id: c.id,
       origen: c.origen,
       principal: c.id === this.principal,
+      // Van las capacidades del saludo porque el grabador nombra los archivos
+      // con el modelo del movil. Sin ellas caia al identificador de sesion y los
+      // archivos salian como "wifi-127.0.0.1-52076.mp4".
+      capacidades: c.capacidades,
       estadoMovil: c.estadoMovil,
       desfase: c.sesion.desfase ?? null,
     }));
