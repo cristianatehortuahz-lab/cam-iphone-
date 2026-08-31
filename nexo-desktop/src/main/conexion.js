@@ -1,11 +1,15 @@
 'use strict';
 
-// Orquestador de la conexion nativa con Nexo Cam. Es lo que faltaba de F3.5:
-// cablea las piezas del transporte (usbmux, protocolo, WiFi/Bonjour) al proceso
-// principal y las expone al renderer via IPC.
+// Orquestador de las conexiones con Nexo Cam. Cablea las piezas del transporte
+// (usbmux, protocolo, WiFi/Bonjour) al proceso principal y las expone al
+// renderer via IPC.
 //
-//   Escucha eventos:  'estado' | 'sesion' | 'video' | 'perdida'
-//   Publica IPC:      nexo:conexion:estado, nexo:conexion:video
+// Admite VARIOS iPhone a la vez, uno por dispositivo: es lo que permite grabar
+// una misma toma desde varios angulos. Antes habia un unico hueco de sesion y
+// las demas se cerraban nada mas llegar.
+//
+// De todos los conectados, uno es el "principal": el que se ve en el estudio y
+// el que sale a OBS. Todos se graban, se mire el que se mire.
 
 const { EventEmitter } = require('events');
 const usbmux = require('./usbmux');
@@ -18,27 +22,28 @@ const INTERVALO_SONDEO = 2000; // ms entre comprobaciones de usbmux
 class Conexion extends EventEmitter {
   constructor({ ipcVideo, ipcAudio } = {}) {
     super();
-    this.sesion = null;
-    this.origen = null; // 'cable' | 'wifi' | null
-    this.dispositivoID = null;
+    // Una sesion por dispositivo, con su identificador como clave.
+    this.sesiones = new Map();
+    // Dispositivos con un tunel a medio abrir. El sondeo es asincrono y no
+    // espera, asi que sin esto dos vueltas seguidas abren dos tuneles al mismo
+    // iPhone.
+    this.conectando = new Set();
+    this.principal = null;
+
     this.hayUsbmux = false;
-    this.hayCable = false;
     this.temporizadorSondeo = null;
     this.sondeando = false;
-    this.reintento = null;
     this.servidorWifi = null;
     this.anunciante = null;
-    this.ultimoEstadoMovil = null;
 
-    // Callback para reenviar cada NAL de video al renderer. Se separa asi para
-    // no acoplar este modulo a Electron: en pruebas se puede pasar cualquier fn.
+    // Reenvio de media. Llevan el identificador del movil porque con varias
+    // camaras hay que saber cual es cual: el grabador escribe un archivo por
+    // cada una.
     this.ipcVideo = ipcVideo || (() => {});
     this.ipcAudio = ipcAudio || (() => {});
   }
 
   async iniciar() {
-    // Ruta cable: sondea usbmux. Sin iPhone conectado no se hace nada; en cuanto
-    // aparece, se abre el tunel y se conecta.
     this.hayUsbmux = await usbmux.disponible();
     if (!this.hayUsbmux) {
       this.#publicar('sin-usbmux');
@@ -47,11 +52,15 @@ class Conexion extends EventEmitter {
     this.temporizadorSondeo = setInterval(() => this.#sondearCable(), INTERVALO_SONDEO);
     this.#sondearCable(); // primer intento inmediato
 
-    // Ruta WiFi: escuchar en el puerto Nexo y anunciarse por Bonjour.
     this.servidorWifi = transporte.servidorWifi(WIFI);
     this.servidorWifi.on('escuchando', (p) => console.log('[nexo] WiFi escucha en', p));
     this.servidorWifi.on('error', (e) => console.error('[nexo] servidor WiFi:', e.message));
-    this.servidorWifi.on('sesion', (ses) => this.#considerarSesion(ses, 'wifi'));
+    this.servidorWifi.on('sesion', (ses) => {
+      // Por WiFi no hay identificador hasta el saludo: se usa el extremo remoto,
+      // que ya distingue dos moviles distintos.
+      const zocalo = ses.socket.remoteAddress + ':' + ses.socket.remotePort;
+      this.#considerarSesion(ses, 'wifi', 'wifi-' + zocalo);
+    });
 
     try {
       this.anunciante = new Anunciante();
@@ -65,111 +74,140 @@ class Conexion extends EventEmitter {
   }
 
   async #sondearCable() {
-    // Cualquier sesion activa, no solo la de cable: si hay una sesion WiFi
-    // abierta y solo miraramos 'cable', abririamos un tunel usbmux nuevo cada
-    // 2 s que luego se descarta — un socket y un temporizador filtrados por
-    // sondeo, indefinidamente.
-    if (this.sesion) return;
-    // El sondeo es asincrono y el intervalo no espera: sin esto, dos sondeos
-    // solapados pueden abrir dos tuneles.
     if (this.sondeando) return;
     this.sondeando = true;
     try {
       const dispositivos = await usbmux.listarDispositivos();
-      const primero = dispositivos[0] || null;
 
-      // Publicar cambios de estado del cable (para la interfaz).
       const habia = this.hayCable;
-      this.hayCable = Boolean(primero);
-      if (habia !== this.hayCable) this.#publicar(this.hayCable ? 'cable-detectado' : 'cable-quitado');
+      this.hayCable = dispositivos.length > 0;
+      if (habia !== this.hayCable) {
+        this.#publicar(this.hayCable ? 'cable-detectado' : 'cable-quitado');
+      }
 
-      if (!primero) return;
-      this.dispositivoID = primero.deviceID;
+      // TODOS los iPhone conectados, no solo el primero: cada uno es un angulo.
+      for (const dispositivo of dispositivos) {
+        const id = 'cable-' + dispositivo.deviceID;
+        if (this.sesiones.has(id) || this.conectando.has(id)) continue;
 
-      // Intentar abrir el tunel.
-      const ses = await transporte.conectarCable(primero.deviceID, CABLE_IPHONE);
-      this.#considerarSesion(ses, 'cable');
+        this.conectando.add(id);
+        try {
+          const ses = await transporte.conectarCable(dispositivo.deviceID, CABLE_IPHONE);
+          this.#considerarSesion(ses, 'cable', id);
+        } catch (e) {
+          // Es normal: usbmux lista el iPhone en cuanto lo enchufas, pero Nexo
+          // Cam tarda unos segundos en abrir el puerto. Se reintenta al sondeo
+          // siguiente.
+          if (!/rechazo|puerto/i.test(e.message)) {
+            console.error('[nexo] sondeo cable:', e.message);
+          }
+        } finally {
+          this.conectando.delete(id);
+        }
+      }
     } catch (e) {
-      // Es normal: usbmux lista el iPhone en cuanto lo enchufas, pero la app
-      // Nexo Cam tarda unos segundos en abrir el puerto. Reintentamos.
-      if (!/rechazo|puerto/i.test(e.message)) console.error('[nexo] sondeo cable:', e.message);
+      console.error('[nexo] sondeo cable:', e.message);
     } finally {
       this.sondeando = false;
     }
   }
 
-  // Una conexion recien abierta todavia no es "la" sesion: solo lo sera cuando
-  // se presente con un saludo valido (y, por WiFi, con la clave correcta). Asi
-  // una conexion muda o ajena no ocupa el hueco del iPhone real.
-  #considerarSesion(nueva, origen) {
-    if (this.sesion) {
-      // Sobra. Cerrarla de verdad: antes se descartaba con un `return` seco y
-      // se quedaba el socket abierto y el latido latiendo para siempre.
+  // Una conexion recien abierta todavia no es una sesion: solo lo sera cuando se
+  // presente con un saludo valido (y, por WiFi, con la clave correcta). Asi una
+  // conexion muda o ajena no ocupa el sitio de un iPhone de verdad.
+  #considerarSesion(nueva, origen, id) {
+    if (this.sesiones.has(id)) {
+      // Ese dispositivo ya tiene sesion. Cerrarla de verdad: descartarla con un
+      // `return` seco dejaba el socket abierto y el latido latiendo para siempre.
       nueva.cerrar();
       return;
     }
 
-    nueva.on('rechazada', (e) =>
-      console.warn(`[nexo] conexion ${origen} rechazada: ${e.message}`)
-    );
-    nueva.on('error', (e) => console.error('[nexo] sesion:', e.message));
+    nueva.on('rechazada', (e) => console.warn(`[nexo] conexion ${origen} rechazada: ${e.message}`));
+    nueva.on('error', (e) => console.error(`[nexo] sesion ${id}:`, e.message));
 
     nueva.once('listo', (capacidades) => {
-      if (this.sesion) return nueva.cerrar(); // otra ruta gano la carrera
-      this.#adoptarSesion(nueva, origen, capacidades);
+      if (this.sesiones.has(id)) return nueva.cerrar(); // gano otra carrera
+      this.#adoptarSesion(nueva, origen, id, capacidades);
     });
   }
 
-  #adoptarSesion(nueva, origen, capacidades) {
-    this.sesion = nueva;
-    this.origen = origen;
-    console.log('[nexo] sesion abierta por', origen);
-    this.#publicar('sesion-abierta');
-    this.#publicar('movil-listo', { capacidades, origen });
+  #adoptarSesion(nueva, origen, id, capacidades) {
+    const camara = { id, origen, sesion: nueva, capacidades, estadoMovil: null };
+    this.sesiones.set(id, camara);
+    // El primero que llega manda en el estudio; los demas se graban igual.
+    if (!this.principal) this.principal = id;
+
+    console.log(`[nexo] sesion abierta por ${origen} (${id})`);
+    this.#publicar('sesion-abierta', { id, origen });
+    this.#publicar('movil-listo', { id, capacidades, origen });
 
     nueva.on('estado', (estado) => {
       // Se guarda porque el iPhone publica su estado al conectar y luego solo
       // cuando algo cambia. La sesion puede abrirse antes de que exista la
-      // ventana, y entonces ese unico envio —con la lista de lentes— se
-      // perderia y el estudio se quedaria sin selector para siempre.
-      this.ultimoEstadoMovil = estado;
-      this.#publicar('estado-movil', estado);
+      // ventana, y ese unico envio —con la lista de lentes— se perderia.
+      camara.estadoMovil = estado;
+      this.#publicar('estado-movil', { id, estado });
     });
-    // El transporte ya emitia 'audio' y no lo escuchaba nadie: las tramas
-    // llegaban del iPhone y se tiraban ahi mismo.
-    nueva.on('audio', (a) => this.ipcAudio(a));
 
-    nueva.on('video', (v) => {
-      // Reenvio al renderer. En 12 Mbps son ~1,5 MB/s de NAL ya comprimidos:
-      // el IPC de Electron lo absorbe sin problema notable.
-      this.ipcVideo(v);
-    });
+    nueva.on('audio', (a) => this.ipcAudio(a, id));
+    nueva.on('video', (v) => this.ipcVideo(v, id));
+
     nueva.once('fin', () => {
-      console.log('[nexo] sesion cerrada');
+      console.log(`[nexo] sesion cerrada (${id})`);
       // cerrar() ademas de soltar la referencia: para el latido y destruye el
       // socket aunque el cierre no viniera de nosotros.
       nueva.cerrar();
-      this.sesion = null;
-      this.origen = null;
-      this.ultimoEstadoMovil = null;
-      this.#publicar('sesion-cerrada');
-      // Si fue por cable y el iPhone sigue enchufado, el sondeo reconectara solo.
+      this.sesiones.delete(id);
+      if (this.principal === id) {
+        // Pasa el mando a otra camara si queda alguna.
+        this.principal = this.sesiones.keys().next().value || null;
+      }
+      this.#publicar('sesion-cerrada', { id });
     });
   }
 
-  // Reenvia una orden del PC al iPhone (cambiar lente, zoom, etc.).
-  enviarControl(orden) {
-    if (this.sesion) this.sesion.enviarControl(orden);
+  // Cual se ve en el estudio y sale a OBS. Grabar sigue grabandolas todas.
+  elegirPrincipal(id) {
+    if (!this.sesiones.has(id)) return false;
+    this.principal = id;
+    this.#publicar('principal-cambiada', { id });
+    return true;
+  }
+
+  // Sin id, la orden va a TODAS: util para empezar a grabar o poner la misma
+  // resolucion en todos los angulos de una vez.
+  enviarControl(orden, id = null) {
+    if (id) {
+      const camara = this.sesiones.get(id);
+      if (camara) camara.sesion.enviarControl(orden);
+      return;
+    }
+    for (const camara of this.sesiones.values()) camara.sesion.enviarControl(orden);
+  }
+
+  camaras() {
+    return [...this.sesiones.values()].map((c) => ({
+      id: c.id,
+      origen: c.origen,
+      principal: c.id === this.principal,
+      estadoMovil: c.estadoMovil,
+      desfase: c.sesion.desfase ?? null,
+    }));
   }
 
   estado() {
     return {
       hayUsbmux: this.hayUsbmux,
-      hayCable: this.hayCable,
-      dispositivoID: this.dispositivoID,
-      conectado: Boolean(this.sesion),
-      origen: this.origen,
-      estadoMovil: this.ultimoEstadoMovil || null,
+      hayCable: Boolean(this.hayCable),
+      conectado: this.sesiones.size > 0,
+      cuantas: this.sesiones.size,
+      principal: this.principal,
+      camaras: this.camaras(),
+      // Compatibilidad con lo que ya leen el estudio y el puente, que hasta
+      // ahora daban por hecho una sola camara.
+      origen: this.sesiones.get(this.principal)?.origen || null,
+      estadoMovil: this.sesiones.get(this.principal)?.estadoMovil || null,
     };
   }
 
@@ -179,8 +217,8 @@ class Conexion extends EventEmitter {
 
   async detener() {
     clearInterval(this.temporizadorSondeo);
-    clearTimeout(this.reintento);
-    if (this.sesion) this.sesion.cerrar();
+    for (const camara of this.sesiones.values()) camara.sesion.cerrar();
+    this.sesiones.clear();
     if (this.servidorWifi) this.servidorWifi.detener();
     if (this.anunciante) this.anunciante.cerrar();
   }

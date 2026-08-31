@@ -1,10 +1,11 @@
 'use strict';
 
-const { app, BrowserWindow, Tray, Menu, shell, ipcMain, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, ipcMain, nativeImage, dialog } = require('electron');
 const path = require('path');
 const { Ajustes } = require('./ajustes');
 const { Conexion } = require('./conexion');
 const protocolo = require('./protocolo');
+const { Grabador } = require('./grabador');
 const { rutaLegado } = require('./clave');
 
 // El servidor legado (auditado) corre embebido dentro de la app: sirve el
@@ -19,6 +20,7 @@ let bandeja = null;
 let servidor = null; // referencia devuelta por legado.iniciar()
 let conexion = null; // orquestador de Nexo Cam (usbmux + WiFi)
 let ajustes = null;
+const grabador = new Grabador();
 let saliendoDeVerdad = false;
 
 // Una sola instancia: el segundo arranque solo enfoca la ventana existente.
@@ -65,12 +67,21 @@ async function iniciarConexionNativa() {
   conexion = new Conexion({
     // Cada fotograma llega ya con u64 tiempo, u8 flags (clave) y las NAL.
     // Se reenvia al renderer, que lo mete en el decodificador WebCodecs.
-    ipcAudio: (a) => {
+    ipcAudio: (a, id) => {
+      if (id !== conexion.principal) return; // solo se oye la camara principal
       if (ventana && !ventana.isDestroyed()) {
         ventana.webContents.send('nexo:audio', a);
       }
     },
-    ipcVideo: (v) => {
+    ipcVideo: (v, id) => {
+      // El grabador se queda con TODAS las camaras: se graban todos los angulos
+      // aunque en pantalla solo se vea uno.
+      grabador.escribir(v, id);
+
+      // De aqui en adelante, solo la principal: es la que se ve y la que sale a
+      // OBS. Mandar las demas seria gastar IPC y ancho de banda para nada.
+      if (id !== conexion.principal) return;
+
       if (ventana && !ventana.isDestroyed()) {
         ventana.webContents.send('nexo:video', v);
       }
@@ -269,6 +280,9 @@ function aplicarArranqueConWindows() {
 async function salir() {
   saliendoDeVerdad = true;
   try {
+    // Cerrar la toma antes que nada: asi el contenedor se cierra bien en vez
+    // de quedar a medias.
+    if (grabador.grabando) await grabador.parar(conexion?.camaras() || []);
     if (conexion) await conexion.detener();
     if (servidor) await servidor.detener();
   } catch {
@@ -286,8 +300,51 @@ ipcMain.handle('nexo:estado', () => ({
   conexion: conexion?.estado() || null,
 }));
 
-// El renderer manda ordenes al iPhone (cambiar de lente, zoom, etc.).
-ipcMain.on('nexo:control', (_ev, orden) => conexion?.enviarControl(orden));
+// El renderer manda ordenes al iPhone (cambiar de lente, zoom, etc.). Sin id
+// van a todas las camaras a la vez.
+ipcMain.on('nexo:control', (_ev, orden, id) => conexion?.enviarControl(orden, id));
+
+// Cual se ve en el estudio. Grabar sigue grabandolas todas.
+ipcMain.handle('nexo:principal', (_ev, id) => conexion?.elegirPrincipal(id) || false);
+
+// --- Grabacion --------------------------------------------------------------
+
+function carpetaGrabaciones() {
+  return ajustes.get('carpetaGrabaciones') || path.join(app.getPath('videos'), 'Nexo');
+}
+
+ipcMain.handle('nexo:grabar', () => {
+  const r = grabador.empezar(conexion?.camaras() || [], carpetaGrabaciones());
+  if (ventana && !ventana.isDestroyed()) {
+    ventana.webContents.send('nexo:grabacion', grabador.estado());
+  }
+  return r;
+});
+
+ipcMain.handle('nexo:parar-grabacion', async () => {
+  const r = await grabador.parar(conexion?.camaras() || []);
+  if (ventana && !ventana.isDestroyed()) {
+    ventana.webContents.send('nexo:grabacion', grabador.estado());
+  }
+  return r;
+});
+
+ipcMain.handle('nexo:estado-grabacion', () => grabador.estado());
+
+ipcMain.handle('nexo:elegir-carpeta', async () => {
+  const r = await dialog.showOpenDialog(ventana, {
+    title: 'Donde guardar las grabaciones',
+    defaultPath: carpetaGrabaciones(),
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (r.canceled || !r.filePaths.length) return null;
+  ajustes.set('carpetaGrabaciones', r.filePaths[0]);
+  return r.filePaths[0];
+});
+
+ipcMain.handle('nexo:abrir-carpeta', (_ev, ruta) => {
+  shell.openPath(ruta || carpetaGrabaciones());
+});
 
 app.on('window-all-closed', () => {
   // En Windows, cerrar la ventana no cierra la app si vamos a la bandeja.
