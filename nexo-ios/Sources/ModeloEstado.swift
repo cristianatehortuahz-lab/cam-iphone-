@@ -8,6 +8,30 @@ import UIKit
 // atiende las ordenes que llegan del PC y publica el estado para la interfaz.
 // Es un ObservableObject: SwiftUI se redibuja cuando cambian sus @Published.
 
+// Caja con candado para compartir una referencia entre el hilo principal y los
+// de captura y codificacion.
+//
+// Hace falta porque los callbacks de la camara y del codificador corren en
+// hilos de fondo 30-60 veces por segundo, y leian directamente propiedades de
+// ModeloEstado, que es @MainActor: una carrera de datos de verdad, y error de
+// compilacion en cuanto se active la concurrencia estricta de Swift 6.
+final class Cofre<T>: @unchecked Sendable {
+    private let candado = NSLock()
+    private var valor: T?
+
+    func poner(_ nuevo: T?) {
+        candado.lock()
+        valor = nuevo
+        candado.unlock()
+    }
+
+    func leer() -> T? {
+        candado.lock()
+        defer { candado.unlock() }
+        return valor
+    }
+}
+
 @MainActor
 final class ModeloEstado: ObservableObject {
     // Estado visible en la interfaz.
@@ -31,6 +55,11 @@ final class ModeloEstado: ObservableObject {
     private let camara = CamaraEngine()
     private var codificador: Codificador?
     private var sesion: SesionNexo?
+
+    // Lo mismo que las dos de arriba, pero alcanzable sin tocar el hilo
+    // principal: es lo que leen los callbacks de captura y codificacion.
+    private let cofreCodificador = Cofre<Codificador>()
+    private let cofreSesion = Cofre<SesionNexo>()
     private let servidorCable: ServidorCable
     private let buscador = BuscadorPC()
     private var clienteWifi: ClienteWifi?
@@ -46,8 +75,11 @@ final class ModeloEstado: ObservableObject {
         servidorCable = ServidorCable(capacidades: caps)
         clienteWifi = ClienteWifi(capacidades: caps)
 
-        camara.alFotograma = { [weak self] px, tiempo in
-            self?.codificador?.codificar(px, tiempo: tiempo)
+        // Se captura el cofre, no self: este bloque corre en la cola de la
+        // camara y tocar aqui una propiedad @MainActor es una carrera.
+        let cofreCod = cofreCodificador
+        camara.alFotograma = { px, tiempo in
+            cofreCod.leer()?.codificar(px, tiempo: tiempo)
         }
 
         servidorCable.alSesion = { [weak self] ses in
@@ -91,14 +123,17 @@ final class ModeloEstado: ObservableObject {
         // (Re)crear el codificador. No se le dan medidas: las toma del primer
         // fotograma real de la camara, que es la unica fuente fiable.
         let cod = Codificador()
-        cod.alFotograma = { [weak self] datos, micros, clave in
-            self?.sesion?.enviarVideo(datos, microsegundos: micros, esClave: clave)
+        // Igual que arriba: esto corre en el hilo de VideoToolbox.
+        let cofreSes = cofreSesion
+        cod.alFotograma = { datos, micros, clave in
+            cofreSes.leer()?.enviarVideo(datos, microsegundos: micros, esClave: clave)
         }
         cod.alCambiarMedidas = { [weak self] in
             Task { @MainActor in self?.publicarEstado() }
         }
         cod.iniciar(fps: Int32(fps), bitrate: bitrate())
         codificador = cod
+        cofreCodificador.poner(cod)
     }
 
     private func dimensiones() -> (Int, Int) {
@@ -121,6 +156,7 @@ final class ModeloEstado: ObservableObject {
     private func adoptarSesion(_ ses: SesionNexo, origen: String) {
         sesion?.cerrar()
         sesion = ses
+        cofreSesion.poner(ses)
         origenConexion = origen
 
         ses.alListo = { [weak self] _ in
@@ -136,9 +172,14 @@ final class ModeloEstado: ObservableObject {
         }
         ses.alFin = { [weak self] in
             Task { @MainActor in
-                self?.conectado = false
-                self?.transmitiendo = false
-                self?.mensaje = "Conexion cerrada"
+                guard let self = self else { return }
+                self.conectado = false
+                self.transmitiendo = false
+                self.mensaje = "Conexion cerrada"
+                // Que el hilo del codificador deje de escribir en una sesion
+                // muerta.
+                self.cofreSesion.poner(nil)
+                self.sesion = nil
             }
         }
     }
