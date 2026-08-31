@@ -118,6 +118,7 @@ final class ModeloEstado: ObservableObject {
         lentes = CamaraEngine.lentesDisponibles()
         // Arrancar en la principal por defecto.
         lenteActualID = lentes.first(where: { $0.nombre.contains("Principal") })?.id ?? lentes.first?.id
+        camara.vigilarInterrupciones()
         aplicarCamara()
         servidorCable.iniciar()   // escucha por cable siempre
         buscador.iniciar()        // busca PCs por WiFi
@@ -280,6 +281,7 @@ final class ModeloEstado: ObservableObject {
             "capacidades": camara.capacidades(),
             "audio": camara.hayAudio,
             "giro": camara.giroAplicado,
+            "captura": camara.diagnostico(),
         ]
         // La resolucion de arriba es la PEDIDA. Estas dos son la realidad, y sin
         // ellas un desajuste era invisible desde el PC: el estudio mostraba

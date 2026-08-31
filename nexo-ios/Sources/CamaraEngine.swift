@@ -31,6 +31,10 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     // Ultimo angulo de giro que la conexion acepto de verdad. Se publica al PC
     // para poder comprobar la orientacion con datos en vez de a ojo.
     private(set) var giroAplicado: Int = 0
+    // iOS interrumpe la captura por su cuenta (llamada entrante, otra app
+    // tomando la camara, falta de recursos). Si no se mira, la app parece
+    // funcionar mientras no entrega un solo fotograma.
+    private(set) var interrumpida = false
 
     // Audio. Va por su propia cola: mezclarlo con la de video haria que un
     // fotograma pesado retrasara el sonido, que es mucho mas sensible a los
@@ -124,20 +128,13 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         salida.setSampleBufferDelegate(self, queue: colaVideo)
         if sesion.canAddOutput(salida) { sesion.addOutput(salida) }
 
-        // Microfono. Solo si hay permiso: pedirlo aqui bloquearia la
-        // configuracion, y sin el la camara debe seguir funcionando igual.
-        if entradaAudio == nil,
-           AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
-           let micro = AVCaptureDevice.default(for: .audio),
-           let entradaMic = try? AVCaptureDeviceInput(device: micro),
-           sesion.canAddInput(entradaMic) {
-            sesion.addInput(entradaMic)
-            entradaAudio = entradaMic
-            salidaAudio.setSampleBufferDelegate(self, queue: colaAudio)
-            if sesion.canAddOutput(salidaAudio) { sesion.addOutput(salidaAudio) }
-        }
-
         sesion.commitConfiguration()
+
+        // El microfono se anade APARTE, ya cerrada la configuracion del video.
+        // Metido dentro, un fallo suyo se llevaba por delante la sesion entera y
+        // la camara dejaba de entregar fotogramas: sin video, sin formato
+        // aplicado y sin conexion sobre la que fijar el giro.
+        anadirAudioSiSePuede()
 
         // Orientacion vertical (contenido para redes). Va DESPUES del commit y
         // comprobando que el angulo esta soportado: dentro del bloque de
@@ -178,6 +175,54 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         }
 
         alEstado?()
+    }
+
+    // Anade el microfono en su propia transaccion. El video ya esta funcionando
+    // cuando se llama, asi que si algo de esto falla se pierde el sonido pero
+    // no la imagen.
+    private func anadirAudioSiSePuede() {
+        guard entradaAudio == nil,
+              AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+              let micro = AVCaptureDevice.default(for: .audio),
+              let entradaMic = try? AVCaptureDeviceInput(device: micro)
+        else { return }
+
+        // Sin poner la categoria en grabacion, anadir el microfono puede
+        // interrumpir la sesion de captura entera. Faltaba, y es la causa mas
+        // probable de que la camara dejara de entregar buffers.
+        do {
+            let audio = AVAudioSession.sharedInstance()
+            try audio.setCategory(.playAndRecord, mode: .videoRecording,
+                                  options: [.mixWithOthers, .defaultToSpeaker])
+            try audio.setActive(true)
+        } catch {
+            NSLog("Nexo: no se pudo preparar el audio (%@); se sigue sin sonido",
+                  error.localizedDescription)
+            return
+        }
+
+        sesion.beginConfiguration()
+        if sesion.canAddInput(entradaMic) {
+            sesion.addInput(entradaMic)
+            entradaAudio = entradaMic
+            salidaAudio.setSampleBufferDelegate(self, queue: colaAudio)
+            if sesion.canAddOutput(salidaAudio) { sesion.addOutput(salidaAudio) }
+            NSLog("Nexo: microfono anadido")
+        }
+        sesion.commitConfiguration()
+    }
+
+    // Para poder ver desde el PC si la captura esta viva. Sin esto, "no llegan
+    // fotogramas" podia ser media docena de cosas distintas.
+    func diagnostico() -> [String: Any] {
+        [
+            "corriendo": sesion.isRunning,
+            "conexionVideo": salida.connection(with: .video) != nil,
+            "entradas": sesion.inputs.count,
+            "salidas": sesion.outputs.count,
+            "interrumpida": interrumpida,
+            "audio": entradaAudio != nil,
+        ]
     }
 
     // Resoluciones que la lente ACTUAL puede dar, sin repetir y de mayor a
@@ -361,6 +406,28 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     }
 
     // --- Ciclo de vida ------------------------------------------------------
+
+    // Avisos de iOS sobre la sesion. Se registran una vez.
+    func vigilarInterrupciones() {
+        let c = NotificationCenter.default
+        c.addObserver(forName: .AVCaptureSessionWasInterrupted, object: sesion, queue: nil) { [weak self] n in
+            self?.interrumpida = true
+            let motivo = (n.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int) ?? -1
+            NSLog("Nexo: captura interrumpida (motivo %d)", motivo)
+            self?.alEstado?()
+        }
+        c.addObserver(forName: .AVCaptureSessionInterruptionEnded, object: sesion, queue: nil) { [weak self] _ in
+            self?.interrumpida = false
+            NSLog("Nexo: captura reanudada")
+            self?.alEstado?()
+        }
+        c.addObserver(forName: .AVCaptureSessionRuntimeError, object: sesion, queue: nil) { [weak self] n in
+            let e = n.userInfo?[AVCaptureSessionErrorKey]
+            NSLog("Nexo: error de captura: %@", "\(e ?? "desconocido")")
+            // Reintentar: un error puntual no deberia dejar la camara muerta.
+            self?.arrancar()
+        }
+    }
 
     func arrancar() {
         colaVideo.async { [weak self] in
