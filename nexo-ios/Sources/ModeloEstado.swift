@@ -40,10 +40,12 @@ final class ModeloEstado: ObservableObject {
     @Published var transmitiendo = false
     @Published var conectado = false
     @Published var origenConexion = ""        // "cable" | "wifi"
-    // Vertical por defecto: Nexo es para contenido de redes, y es lo que
-    // promete CamaraEngine al girar la conexion 90 grados. Arrancar en
-    // horizontal obligaba a cambiarlo a mano en cada sesion.
-    @Published var resolucion = "1080x1920"
+    // 4K vertical por defecto. Vertical porque Nexo es para contenido de redes,
+    // y 4K porque el uso principal es dejar grabaciones en el PC: se graba la
+    // copia tal cual llega del movil, asi que la calidad de origen es la que
+    // acaba en el archivo y no se puede recuperar despues. Las calidades
+    // menores siguen ahi, detras de un boton en el estudio.
+    @Published var resolucion = "2160x3840"
     @Published var fps = 30
     @Published var pcsWifi: [PCNexo] = []
     @Published var mensaje = "Listo para transmitir"
@@ -277,6 +279,7 @@ final class ModeloEstado: ObservableObject {
             // necesita para mostrar esos controles: sin ellos los escondia.
             "capacidades": camara.capacidades(),
             "audio": camara.hayAudio,
+            "giro": camara.giroAplicado,
         ]
         // La resolucion de arriba es la PEDIDA. Estas dos son la realidad, y sin
         // ellas un desajuste era invisible desde el PC: el estudio mostraba

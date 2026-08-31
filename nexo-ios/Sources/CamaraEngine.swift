@@ -28,6 +28,9 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private var entrada: AVCaptureDeviceInput?
     private let salida = AVCaptureVideoDataOutput()
     private(set) var dispositivoActual: AVCaptureDevice?
+    // Ultimo angulo de giro que la conexion acepto de verdad. Se publica al PC
+    // para poder comprobar la orientacion con datos en vez de a ojo.
+    private(set) var giroAplicado: Int = 0
 
     // Audio. Va por su propia cola: mezclarlo con la de video haria que un
     // fotograma pesado retrasara el sonido, que es mucho mas sensible a los
@@ -150,17 +153,26 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             // El sensor entrega apaisado, asi que para horizontal no hay que
             // girar nada. Para vertical hay que girarlo, y la frontal necesita el
             // sentido contrario a las traseras porque su sensor esta al reves.
+            // Horizontal no necesita giro (el sensor ya entrega apaisado) y
+            // vertical si. La frontal prueba 270 antes que 90 porque su sensor
+            // va al reves, con respaldo a lo otro si el angulo no esta admitido.
             let quiereVertical = alto > ancho
+            let esFrontal = disp.position == .front
             let preferidos: [CGFloat] = quiereVertical
-                ? (disp.position == .front ? [270, 90] : [90, 270])
-                : [0]
+                ? (esFrontal ? [270, 90] : [90, 270])
+                : [0, 180]
 
             if let angulo = preferidos.first(where: { con.isVideoRotationAngleSupported($0) }) {
                 con.videoRotationAngle = angulo
+                // Se publica al PC. Sin esto, saber que angulo acepto cada lente
+                // exige leer los logs del movil, que desde el PC no se ven: era
+                // adivinar en vez de medir.
+                giroAplicado = Int(angulo)
                 NSLog("Nexo: giro %.0f grados (%@, %@)", angulo,
                       disp.position == .front ? "frontal" : "trasera",
                       quiereVertical ? "vertical" : "horizontal")
             } else {
+                giroAplicado = 0
                 NSLog("Nexo: ningun giro admitido; se emite tal cual sale del sensor")
             }
         }

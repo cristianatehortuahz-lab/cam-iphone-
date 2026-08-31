@@ -26,6 +26,7 @@ const elEnfoque = $('enfoque');
 const elBalance = $('balance');
 const elFormato = $('formato');
 const elRecortar = $('recortar');
+const elMasCalidades = $('masCalidades');
 const elPreset = $('preset');
 
 const elGuias = $('guias');
@@ -58,6 +59,11 @@ let verZonas = false;
 let comparando = false;
 let firmaLentes = '';
 let firmaFormatos = '';
+// Por defecto solo se ofrece 4K: el uso principal es dejar grabaciones, y la
+// grabacion copia lo que manda el movil sin recodificar, asi que la calidad de
+// origen es la que acaba en el archivo. Las menores estan detras del boton, por
+// si hace falta bajar (movil caliente, disco justo, red que no da).
+let mostrarTodasCalidades = false;
 
 const procesador = new ProcesadorImagen(elVideo);
 // El puente Nexo Desktop -> Electron necesita alcanzar el procesador para
@@ -297,15 +303,29 @@ function pintarFormatos(msg) {
   if (!formatos.length) return; // sin datos del movil se deja la lista fija
 
   const fps = Number(elFps.value) || 30;
+  const utiles = formatos.filter((f) => !f.fpsMax || f.fpsMax >= fps);
+  if (!utiles.length) return;
+
+  // Sin desplegar, solo la mejor calidad que da la lente (que en un iPhone 17 es
+  // 4K). Asi el caso normal es una eleccion entre vertical y horizontal, no
+  // entre catorce lineas.
+  const mejor = Math.max(...utiles.map((f) => f.largo));
+  const aMostrar = mostrarTodasCalidades ? utiles : utiles.filter((f) => f.largo === mejor);
+
   // Cada formato del sensor da dos opciones: en vertical y en horizontal.
   const opciones = [];
-  for (const f of formatos) {
-    if (f.fpsMax && f.fpsMax < fps) continue; // no llega a esa fluidez
+  for (const f of aMostrar) {
     const etiqueta = ETIQUETAS_RES[f.corto] || `${f.corto}p`;
     opciones.push({ valor: `${f.corto}x${f.largo}`, texto: `${etiqueta} vertical` });
     opciones.push({ valor: `${f.largo}x${f.corto}`, texto: `${etiqueta} horizontal` });
   }
   if (!opciones.length) return;
+
+  if (elMasCalidades) {
+    elMasCalidades.textContent = mostrarTodasCalidades ? 'Solo la mejor calidad' : 'Otras calidades…';
+    // Sin nada que desplegar, el boton sobra.
+    elMasCalidades.classList.toggle('oculto', utiles.length < 2);
+  }
 
   const firma = opciones.map((o) => o.valor).join('|');
   if (firma === firmaFormatos) {
@@ -330,7 +350,10 @@ function pintarFormatos(msg) {
   }
 }
 
+let ultimoEstadoMovil = null;
+
 function pintarEstadoMovil(msg) {
+  ultimoEstadoMovil = msg;
   const lentes = msg.lentes || [];
   // El iPhone publica su estado cada 2 s. Rehacer la lista cada vez cerraria el
   // desplegable en las narices del usuario, asi que solo se toca si cambio.
@@ -711,6 +734,14 @@ function pararGrabacion() {
 
 elLente.addEventListener('change', () => ordenar('cambiar-lente', elLente.value));
 elResolucion.addEventListener('change', () => ordenar('cambiar-resolucion', elResolucion.value));
+if (elMasCalidades) {
+  elMasCalidades.addEventListener('click', () => {
+    mostrarTodasCalidades = !mostrarTodasCalidades;
+    firmaFormatos = ''; // forzar que se rehaga la lista
+    if (ultimoEstadoMovil) pintarFormatos(ultimoEstadoMovil);
+  });
+}
+
 elFps.addEventListener('change', () => {
   ordenar('cambiar-fps', elFps.value);
   // La lista de resoluciones depende de los fps: a 60 hay menos formatos. Se
