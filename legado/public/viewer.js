@@ -734,8 +734,11 @@ elExposicionCam.addEventListener('input', () => {
   ordenar('exposicion', elExposicionCam.value);
 });
 
-elEnfoque.addEventListener('change', () => elEnfoque.value && ordenar('enfoque', elEnfoque.value));
-elBalance.addEventListener('change', () => elBalance.value && ordenar('balance', elBalance.value));
+// La opcion "automatico" tiene valor vacio, que es falso: con el `&&` de antes,
+// elegirla no mandaba nada y no habia forma de volver al modo automatico una vez
+// bloqueado. Se manda explicitamente.
+elEnfoque.addEventListener('change', () => ordenar('enfoque', elEnfoque.value || 'automatico'));
+elBalance.addEventListener('change', () => ordenar('balance', elBalance.value || 'automatico'));
 
 elPreset.addEventListener('change', () => {
   // Un look es un punto de partida: parte de neutro y aplica sus cambios,

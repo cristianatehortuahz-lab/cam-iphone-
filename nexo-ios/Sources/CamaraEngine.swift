@@ -272,6 +272,60 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         d.unlockForConfiguration()
     }
 
+    // Modos de enfoque y balance de blancos, que el estudio ofrece como listas.
+    // Antes mandaba 'enfoque' y 'balance' y el movil no los entendia: eran dos
+    // desplegables que no hacian absolutamente nada.
+    func aplicarModoEnfoque(_ modo: String) {
+        guard let d = dispositivoActual else { return }
+        try? d.lockForConfiguration()
+        if modo == "bloqueado", d.isFocusModeSupported(.locked) {
+            d.focusMode = .locked
+        } else if d.isFocusModeSupported(.continuousAutoFocus) {
+            d.focusMode = .continuousAutoFocus
+        }
+        d.unlockForConfiguration()
+    }
+
+    func aplicarModoBalance(_ modo: String) {
+        guard let d = dispositivoActual else { return }
+        try? d.lockForConfiguration()
+        if modo == "bloqueado", d.isWhiteBalanceModeSupported(.locked) {
+            d.whiteBalanceMode = .locked
+        } else if d.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+            d.whiteBalanceMode = .continuousAutoWhiteBalance
+        }
+        d.unlockForConfiguration()
+    }
+
+    // Rangos reales de la lente activa, con la forma que el estudio ya sabe
+    // pintar (configurarDeslizador y rellenarLista en viewer.js). Sin esto, esas
+    // funciones escondian el zoom, la exposicion y el enfoque por no recibir
+    // ningun rango: los controles existian y nunca aparecian.
+    func capacidades() -> [String: Any] {
+        guard let d = dispositivoActual else { return [:] }
+        var c: [String: Any] = [:]
+
+        // Se limita el zoom: activeFormat.videoMaxZoomFactor llega a valores
+        // absurdos (>100) que son recorte digital puro y no aportan nada.
+        let zoomMax = min(Double(d.activeFormat.videoMaxZoomFactor), 10)
+        c["zoom"] = ["min": 1.0, "max": zoomMax, "step": 0.1,
+                     "valor": Double(d.videoZoomFactor)]
+
+        if d.isExposureModeSupported(.continuousAutoExposure) {
+            c["exposicion"] = ["min": Double(d.minExposureTargetBias),
+                               "max": Double(d.maxExposureTargetBias),
+                               "step": 0.1,
+                               "valor": Double(d.exposureTargetBias)]
+        }
+
+        // La lista ya incluye "automatico" por su cuenta (opcion de valor
+        // vacio), asi que aqui solo van los modos explicitos.
+        c["modosEnfoque"] = d.isFocusModeSupported(.locked) ? ["bloqueado"] : []
+        c["modosBalance"] = d.isWhiteBalanceModeSupported(.locked) ? ["bloqueado"] : []
+        c["linterna"] = d.hasTorch
+        return c
+    }
+
     // --- Ciclo de vida ------------------------------------------------------
 
     func arrancar() {

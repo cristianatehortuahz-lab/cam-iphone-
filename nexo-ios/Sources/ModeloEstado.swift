@@ -183,6 +183,10 @@ final class ModeloEstado: ObservableObject {
             camara.aplicarISOyObturador(iso: numero(orden["valor"]).map(Float.init), obturadorSeg: nil)
         case "foco":
             camara.aplicarFoco(numero(orden["valor"]).map(Float.init))
+        case "enfoque":
+            camara.aplicarModoEnfoque((orden["valor"] as? String) ?? "automatico")
+        case "balance":
+            camara.aplicarModoBalance((orden["valor"] as? String) ?? "automatico")
         case "linterna":
             linterna.toggle(); camara.aplicarLinterna(linterna)
         default:
@@ -216,6 +220,9 @@ final class ModeloEstado: ObservableObject {
             "formatos": camara.formatosDisponibles().map {
                 ["largo": $0.largo, "corto": $0.corto, "fpsMax": $0.fpsMax]
             },
+            // Rangos de zoom, exposicion, enfoque y linterna. El estudio los
+            // necesita para mostrar esos controles: sin ellos los escondia.
+            "capacidades": camara.capacidades(),
         ]
         // La resolucion de arriba es la PEDIDA. Estas dos son la realidad, y sin
         // ellas un desajuste era invisible desde el PC: el estudio mostraba
