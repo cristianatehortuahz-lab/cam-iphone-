@@ -16,7 +16,7 @@ const { CABLE_IPHONE, WIFI } = require('./puertos');
 const INTERVALO_SONDEO = 2000; // ms entre comprobaciones de usbmux
 
 class Conexion extends EventEmitter {
-  constructor({ ipcVideo } = {}) {
+  constructor({ ipcVideo, ipcAudio } = {}) {
     super();
     this.sesion = null;
     this.origen = null; // 'cable' | 'wifi' | null
@@ -33,6 +33,7 @@ class Conexion extends EventEmitter {
     // Callback para reenviar cada NAL de video al renderer. Se separa asi para
     // no acoplar este modulo a Electron: en pruebas se puede pasar cualquier fn.
     this.ipcVideo = ipcVideo || (() => {});
+    this.ipcAudio = ipcAudio || (() => {});
   }
 
   async iniciar() {
@@ -134,6 +135,10 @@ class Conexion extends EventEmitter {
       this.ultimoEstadoMovil = estado;
       this.#publicar('estado-movil', estado);
     });
+    // El transporte ya emitia 'audio' y no lo escuchaba nadie: las tramas
+    // llegaban del iPhone y se tiraban ahi mismo.
+    nueva.on('audio', (a) => this.ipcAudio(a));
+
     nueva.on('video', (v) => {
       // Reenvio al renderer. En 12 Mbps son ~1,5 MB/s de NAL ya comprimidos:
       // el IPC de Electron lo absorbe sin problema notable.

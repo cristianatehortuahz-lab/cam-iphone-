@@ -43,9 +43,8 @@
   <string>Nexo usa la camara para transmitir la imagen a tu PC como webcam.</string>
   <key>NSLocalNetworkUsageDescription</key>
   <string>Nexo se conecta a tu PC por la red local para transmitir el video por WiFi.</string>
-  <!-- El microfono se declarara cuando el audio este integrado de verdad
-       (AVCaptureAudioDataOutput + AAC). Hoy no se captura, asi que pedir el
-       permiso ahora seria mentirle al usuario. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Nexo usa el microfono para que el sonido acompane al video que envias al PC.</string>
 
 
   <!-- Servicios Bonjour que la app anuncia o busca -->

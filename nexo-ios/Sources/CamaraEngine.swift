@@ -22,15 +22,24 @@ struct LenteInfo: Identifiable, Equatable {
     let tipoRaw: String
 }
 
-final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     let sesion = AVCaptureSession()
     private let colaVideo = DispatchQueue(label: "nexo.camara.video")
     private var entrada: AVCaptureDeviceInput?
     private let salida = AVCaptureVideoDataOutput()
     private(set) var dispositivoActual: AVCaptureDevice?
 
+    // Audio. Va por su propia cola: mezclarlo con la de video haria que un
+    // fotograma pesado retrasara el sonido, que es mucho mas sensible a los
+    // saltos.
+    private let colaAudio = DispatchQueue(label: "nexo.camara.audio")
+    private let salidaAudio = AVCaptureAudioDataOutput()
+    private var entradaAudio: AVCaptureDeviceInput?
+
     // Entrega de fotogramas (buffer, marca de tiempo).
     var alFotograma: ((CVPixelBuffer, CMTime) -> Void)?
+    // Entrega de bloques de sonido en crudo, para codificarlos a AAC.
+    var alAudio: ((CMSampleBuffer) -> Void)?
     // Aviso de cambios de estado para la interfaz (lente, ajustes).
     var alEstado: (() -> Void)?
 
@@ -111,6 +120,19 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         salida.alwaysDiscardsLateVideoFrames = true
         salida.setSampleBufferDelegate(self, queue: colaVideo)
         if sesion.canAddOutput(salida) { sesion.addOutput(salida) }
+
+        // Microfono. Solo si hay permiso: pedirlo aqui bloquearia la
+        // configuracion, y sin el la camara debe seguir funcionando igual.
+        if entradaAudio == nil,
+           AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+           let micro = AVCaptureDevice.default(for: .audio),
+           let entradaMic = try? AVCaptureDeviceInput(device: micro),
+           sesion.canAddInput(entradaMic) {
+            sesion.addInput(entradaMic)
+            entradaAudio = entradaMic
+            salidaAudio.setSampleBufferDelegate(self, queue: colaAudio)
+            if sesion.canAddOutput(salidaAudio) { sesion.addOutput(salidaAudio) }
+        }
 
         sesion.commitConfiguration()
 
@@ -344,8 +366,18 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
+        // El mismo delegado atiende video y audio: se distinguen por la salida
+        // que los entrega, no por el contenido.
+        if output === salidaAudio {
+            alAudio?(sampleBuffer)
+            return
+        }
         guard let px = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let tiempo = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         alFotograma?(px, tiempo)
     }
+
+    // ¿Hay microfono conectado a la sesion? Lo usa el estado para decir si la
+    // grabacion llevara sonido.
+    var hayAudio: Bool { entradaAudio != nil }
 }

@@ -142,7 +142,9 @@ struct VistaPrincipal: View {
 
     private func pedirPermisos() async {
         let camara = await AVCaptureDevice.requestAccess(for: .video)
-        // Sin audio de momento; se anadira cuando se implemente la captura.
+        // El microfono se pide despues y por separado: si se niega, la app sigue
+        // transmitiendo video igual, solo que la grabacion saldra muda.
+        _ = await AVCaptureDevice.requestAccess(for: .audio)
         await MainActor.run {
             permisoConcedido = camara
             if camara {

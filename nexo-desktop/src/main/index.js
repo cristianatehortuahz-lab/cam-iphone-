@@ -65,6 +65,11 @@ async function iniciarConexionNativa() {
   conexion = new Conexion({
     // Cada fotograma llega ya con u64 tiempo, u8 flags (clave) y las NAL.
     // Se reenvia al renderer, que lo mete en el decodificador WebCodecs.
+    ipcAudio: (a) => {
+      if (ventana && !ventana.isDestroyed()) {
+        ventana.webContents.send('nexo:audio', a);
+      }
+    },
     ipcVideo: (v) => {
       if (ventana && !ventana.isDestroyed()) {
         ventana.webContents.send('nexo:video', v);

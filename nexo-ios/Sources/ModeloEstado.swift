@@ -60,6 +60,7 @@ final class ModeloEstado: ObservableObject {
     // principal: es lo que leen los callbacks de captura y codificacion.
     private let cofreCodificador = Cofre<Codificador>()
     private let cofreSesion = Cofre<SesionNexo>()
+    private let codificadorAudio = CodificadorAudio()
     private let servidorCable: ServidorCable
     private let buscador = BuscadorPC()
     private var clienteWifi: ClienteWifi?
@@ -80,6 +81,17 @@ final class ModeloEstado: ObservableObject {
         let cofreCod = cofreCodificador
         camara.alFotograma = { px, tiempo in
             cofreCod.leer()?.codificar(px, tiempo: tiempo)
+        }
+
+        // El audio sigue el mismo camino que el video: se codifica en el hilo de
+        // captura y se manda por la sesion, sin pasar por el hilo principal.
+        let cofreSes = cofreSesion
+        let audio = codificadorAudio
+        camara.alAudio = { muestras in
+            audio.codificar(muestras)
+        }
+        audio.alPaquete = { datos, micros in
+            cofreSes.leer()?.enviarAudio(datos, microsegundos: micros)
         }
 
         servidorCable.alSesion = { [weak self] ses in
@@ -264,6 +276,7 @@ final class ModeloEstado: ObservableObject {
             // Rangos de zoom, exposicion, enfoque y linterna. El estudio los
             // necesita para mostrar esos controles: sin ellos los escondia.
             "capacidades": camara.capacidades(),
+            "audio": camara.hayAudio,
         ]
         // La resolucion de arriba es la PEDIDA. Estas dos son la realidad, y sin
         // ellas un desajuste era invisible desde el PC: el estudio mostraba

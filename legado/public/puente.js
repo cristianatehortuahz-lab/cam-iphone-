@@ -118,6 +118,79 @@
     el.classList.remove('oculto');
   }
 
+  // --- Audio -----------------------------------------------------------
+  //
+  // El iPhone manda AAC en ADTS (cada paquete con su cabecera, decodificable por
+  // si solo). Se decodifica con WebCodecs y se vuelca en un nodo de destino, que
+  // da una pista de audio normal: asi la grabacion puede mezclarla con el video
+  // del lienzo sin que el resto del estudio se entere de nada.
+  //
+  // Si algo de esto falla, el video sigue igual: el audio es un extra.
+  let audioCtx = null;
+  let destinoAudio = null;
+  let decoAudio = null;
+  let proximoInicio = 0;
+
+  function prepararAudio() {
+    if (audioCtx || typeof AudioDecoder === 'undefined') return;
+    try {
+      audioCtx = new AudioContext();
+      destinoAudio = audioCtx.createMediaStreamDestination();
+      // viewer.js la busca aqui al empezar a grabar.
+      window.nexoPistaAudio = destinoAudio.stream.getAudioTracks()[0] || null;
+
+      decoAudio = new AudioDecoder({
+        output: (datos) => {
+          try { reproducir(datos); } finally { datos.close(); }
+        },
+        error: (e) => console.error('[puente] audio:', e.message || e),
+      });
+      // mp4a.40.2 = AAC-LC. La tasa y los canales los fija el iPhone.
+      decoAudio.configure({ codec: 'mp4a.40.2', sampleRate: 44100, numberOfChannels: 1 });
+      console.log('[puente] audio listo');
+    } catch (e) {
+      console.error('[puente] no se pudo preparar el audio:', e.message || e);
+      audioCtx = null;
+    }
+  }
+
+  function reproducir(datos) {
+    if (!audioCtx || !destinoAudio) return;
+    const canales = datos.numberOfChannels;
+    const buffer = audioCtx.createBuffer(canales, datos.numberOfFrames, datos.sampleRate);
+    for (let c = 0; c < canales; c++) {
+      const trozo = new Float32Array(datos.numberOfFrames);
+      datos.copyTo(trozo, { planeIndex: c, format: 'f32-planar' });
+      buffer.copyToChannel(trozo, c);
+    }
+    const fuente = audioCtx.createBufferSource();
+    fuente.buffer = buffer;
+    fuente.connect(destinoAudio);
+    // Se encadenan uno detras de otro. Si nos quedamos atras (la red se atasco),
+    // se reengancha al presente en vez de acumular retraso indefinidamente.
+    const ahora = audioCtx.currentTime;
+    if (proximoInicio < ahora) proximoInicio = ahora + 0.02;
+    fuente.start(proximoInicio);
+    proximoInicio += buffer.duration;
+  }
+
+  if (typeof window.nexo.onAudio === 'function') {
+    window.nexo.onAudio((a) => {
+      prepararAudio();
+      if (!decoAudio || decoAudio.state !== 'configured') return;
+      const datos = a.datos instanceof Uint8Array
+        ? a.datos
+        : new Uint8Array(a.datos.buffer || a.datos, a.datos.byteOffset || 0, a.datos.length || a.datos.byteLength);
+      try {
+        decoAudio.decode(new EncodedAudioChunk({
+          type: 'key', timestamp: a.microsegundos, data: datos,
+        }));
+      } catch (e) {
+        console.error('[puente] audio:', e.message || e);
+      }
+    });
+  }
+
   window.nexo.onConexion((c) => {
     if (c && c.estado) pintarEstadoCable(c.estado);
 

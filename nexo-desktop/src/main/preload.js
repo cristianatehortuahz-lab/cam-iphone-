@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('nexo', {
   // Los buffers de video llegan como { microsegundos, clave, datos } donde
   // datos es un Buffer (Electron lo convierte a Uint8Array-compatible via IPC).
   onVideo: (cb) => ipcRenderer.on('nexo:video', (_ev, v) => cb(v)),
+  // Audio AAC en ADTS, cada paquete con su cabecera: se puede decodificar sin
+  // configuracion previa.
+  onAudio: (cb) => ipcRenderer.on('nexo:audio', (_ev, a) => cb(a)),
   onConexion: (cb) => ipcRenderer.on('nexo:conexion', (_ev, c) => cb(c)),
   enviarControl: (orden) => ipcRenderer.send('nexo:control', orden),
 });
