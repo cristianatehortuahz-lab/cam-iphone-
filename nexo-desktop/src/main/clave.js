@@ -14,9 +14,15 @@ const path = require('path');
 // Igual que rutaLegado() en index.js: empaquetado en resources/legado, y en
 // desarrollo tres niveles por encima de src/main.
 function rutaLegado(archivo) {
-  const empaquetado = path.join(process.resourcesPath || '', 'legado', archivo);
-  const dev = path.join(__dirname, '..', '..', '..', 'legado', archivo);
-  return fs.existsSync(empaquetado) ? empaquetado : dev;
+  // Solo se mira la ruta empaquetada si de verdad hay una: fuera de Electron,
+  // process.resourcesPath es undefined y path.join('', 'legado', archivo) daba
+  // una ruta RELATIVA que puede existir segun desde donde se ejecute. Entonces
+  // require() la tomaba por el nombre de un modulo y fallaba.
+  if (process.resourcesPath) {
+    const empaquetado = path.join(process.resourcesPath, 'legado', archivo);
+    if (fs.existsSync(empaquetado)) return empaquetado;
+  }
+  return path.join(__dirname, '..', '..', '..', 'legado', archivo);
 }
 
 // Directorio donde el servidor legado guarda clave.txt (server.js: CERT_DIR).
