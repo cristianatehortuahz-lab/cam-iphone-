@@ -665,12 +665,13 @@ function empezarGrabacion() {
   const fuente = procesador.disponible ? elSalida.captureStream(60) : flujo;
   if (!fuente) return;
 
-  // El audio viaja en el flujo del iPhone por WebRTC. Por cable todavia no hay
-  // sonido (Nexo Cam aun no lo captura), asi que se graba solo la imagen.
-  const mezcla = new MediaStream([
-    ...fuente.getVideoTracks(),
-    ...(flujo ? flujo.getAudioTracks() : []),
-  ]);
+  // Audio: por WebRTC viene dentro del propio flujo; por cable llega como AAC y
+  // puente.js lo convierte en una pista normal. Sin ninguna de las dos se graba
+  // solo imagen, en vez de fallar.
+  const pistasAudio = flujo
+    ? flujo.getAudioTracks()
+    : (window.nexoPistaAudio ? [window.nexoPistaAudio] : []);
+  const mezcla = new MediaStream([...fuente.getVideoTracks(), ...pistasAudio]);
 
   const formatos = ['video/mp4;codecs=avc1', 'video/webm;codecs=h264', 'video/webm;codecs=vp9', 'video/webm'];
   const tipo = formatos.find((f) => MediaRecorder.isTypeSupported(f));
