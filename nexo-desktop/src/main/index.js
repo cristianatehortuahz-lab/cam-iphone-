@@ -4,6 +4,7 @@ const { app, BrowserWindow, Tray, Menu, shell, ipcMain, nativeImage } = require(
 const path = require('path');
 const { Ajustes } = require('./ajustes');
 const { Conexion } = require('./conexion');
+const protocolo = require('./protocolo');
 const { rutaLegado } = require('./clave');
 
 // El servidor legado (auditado) corre embebido dentro de la app: sirve el
@@ -68,12 +69,26 @@ async function iniciarConexionNativa() {
       if (ventana && !ventana.isDestroyed()) {
         ventana.webContents.send('nexo:video', v);
       }
+      // Y a los navegadores que lo pidan (la fuente de OBS). Por cable el
+      // iPhone no participa en la senalizacion WebRTC, asi que sin esto la
+      // salida a OBS se queda en negro con el estudio recibiendo imagen.
+      if (servidor && servidor.difundirVideo) {
+        servidor.difundirVideo(
+          protocolo.codificarCargaMedia(v.microsegundos, v.datos, { clave: v.clave })
+        );
+      }
     },
   });
   conexion.on('cambio', (c) => {
     if (ventana && !ventana.isDestroyed()) {
       ventana.webContents.send('nexo:conexion', c);
     }
+    // La fuente de OBS vive en un navegador aparte y no ve el IPC: si la sesion
+    // por cable se cierra, hay que decirselo para que reinicie su decodificador.
+    if (c.evento === 'sesion-cerrada' && servidor && servidor.avisarVisores) {
+      servidor.avisarVisores({ tipo: 'nexo-sin-sesion' });
+    }
+
     // Refrescar el menu de bandeja si cambia el estado importante.
     if (['sesion-abierta', 'sesion-cerrada', 'cable-detectado', 'cable-quitado'].includes(c.evento)) {
       if (bandeja) refrescarMenuBandeja();

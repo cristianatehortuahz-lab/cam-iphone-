@@ -54,11 +54,18 @@ function codificarTrama(tipo, carga = Buffer.alloc(0)) {
 
 // Media (video/audio) con marca de tiempo + byte de flags + datos. Bit 0 de
 // flags = fotograma clave (para video); en audio no se usa.
-function codificarMedia(tipo, microsegundos, datos, { clave = false } = {}) {
+function codificarMedia(tipo, microsegundos, datos, opciones = {}) {
+  return codificarTrama(tipo, codificarCargaMedia(microsegundos, datos, opciones));
+}
+
+// Solo la carga de una trama de media, sin la cabecera de tipo y longitud. Se
+// usa tal cual para mandar video a los navegadores por WebSocket, donde el
+// propio mensaje ya delimita, y asi las dos rutas comparten formato.
+function codificarCargaMedia(microsegundos, datos, { clave = false } = {}) {
   const cab = Buffer.alloc(9);
   cab.writeBigUInt64BE(BigInt(microsegundos), 0);
   cab.writeUInt8(clave ? 1 : 0, 8);
-  return codificarTrama(tipo, Buffer.concat([cab, datos]));
+  return Buffer.concat([cab, datos]);
 }
 
 function codificarJson(tipo, obj) {
@@ -181,6 +188,7 @@ module.exports = {
   codificarSaludo,
   codificarTrama,
   codificarMedia,
+  codificarCargaMedia,
   codificarJson,
   Analizador,
 };

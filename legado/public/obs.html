@@ -65,6 +65,7 @@
     <div id="aviso">Esperando la camara del iPhone…</div>
 
     <script src="/procesador.js"></script>
+    <script src="/decodificador.js"></script>
     <script>
       'use strict';
 
@@ -100,11 +101,51 @@
       let pc = null;
       let reconectar = null;
 
+      // --- Ruta nativa (iPhone por cable) ---------------------------------
+      //
+      // Por cable el iPhone no participa en la senalizacion WebRTC, asi que
+      // aqui no llegaba ninguna pista y OBS se quedaba en negro aunque el
+      // estudio estuviera recibiendo imagen. El servidor nos reparte las tramas
+      // H.264 tal cual y las decodificamos igual que el estudio.
+      let nativoActivo = false;
+      let primerNativo = true;
+      const decodificador =
+        typeof DecodificadorVideo !== 'undefined'
+          ? new DecodificadorVideo({
+              onFrame: (frame) => {
+                // El procesador se queda el frame y lo cierra al dibujarlo.
+                procesador.ponerFrameExterno(frame);
+                if (primerNativo) {
+                  procesador.iniciar();
+                  aviso.classList.add('oculto');
+                  primerNativo = false;
+                }
+              },
+              onError: (e) => console.error('[obs] decoder:', e.message || e),
+            })
+          : null;
+
+      function alVideoNativo(datos) {
+        if (!decodificador || datos.byteLength < 9) return;
+        const vista = new DataView(datos);
+        // Mismo formato que el transporte: u64 tiempo, u8 flags, y las NAL.
+        const micros = Number(vista.getBigUint64(0));
+        const clave = (vista.getUint8(8) & 1) !== 0;
+        nativoActivo = true;
+        decodificador.decodificar(new Uint8Array(datos, 9), micros, clave);
+      }
+
       function enviar(m) {
         if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));
       }
 
       function cerrar() {
+        // Con video nativo en marcha esto no nos incumbe: son restos de la ruta
+        // WebRTC, que por cable avisa de que "no hay movil" constantemente.
+        if (nativoActivo) {
+          if (pc) { pc.ontrack = pc.onicecandidate = null; pc.close(); pc = null; }
+          return;
+        }
         procesador.parar();
         if (pc) {
           pc.ontrack = pc.onicecandidate = null;
@@ -139,13 +180,17 @@
         ws.onopen = () => {
           clearTimeout(reconectar);
           enviar({ tipo: 'hola', rol: 'visor' });
+          enviar({ tipo: 'video-nativo', activo: true });
         };
         ws.onclose = () => {
           cerrar();
           reconectar = setTimeout(conectar, 1500);
         };
         ws.onerror = () => ws.close();
+        ws.binaryType = 'arraybuffer';
         ws.onmessage = async (evento) => {
+          // Las tramas de video llegan en binario; la senalizacion en JSON.
+          if (evento.data instanceof ArrayBuffer) return alVideoNativo(evento.data);
           const msg = JSON.parse(evento.data);
           if (msg.tipo === 'oferta') {
             await atenderOferta(msg);
@@ -161,6 +206,14 @@
             procesador.aplicar(msg.valores);
           } else if (msg.tipo === 'movil-desconectado') {
             cerrar();
+          } else if (msg.tipo === 'nexo-sin-sesion') {
+            // El iPhone por cable se fue: reiniciar el decodificador para que
+            // la proxima vez arranque en un fotograma clave.
+            if (decodificador) decodificador.cerrar();
+            nativoActivo = false;
+            primerNativo = true;
+            procesador.parar();
+            aviso.classList.remove('oculto');
           }
         };
       }
