@@ -25,23 +25,47 @@ struct LenteInfo: Identifiable, Equatable {
 final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     let sesion = AVCaptureSession()
     private let colaVideo = DispatchQueue(label: "nexo.camara.video")
+    // Cola propia para configurar y arrancar/parar la sesion. Antes esto se
+    // hacia en el hilo principal (configurar) y en la cola de entrega de
+    // fotogramas (arrancar/parar), y ninguno de los dos es su sitio:
+    // beginConfiguration/commitConfiguration y startRunning BLOQUEAN hasta que
+    // la sesion se rehace. Con la orden llegando desde el PC, el hilo principal
+    // se quedaba colgado dentro de configurar y publicarEstado no volvia a
+    // ejecutarse nunca: cero fotogramas y cero estados, medido.
+    private let colaSesion = DispatchQueue(label: "nexo.camara.sesion")
+    // Protege lo que la cola de sesion escribe y el hilo principal lee al
+    // publicar el estado. Sin esto, mover la configuracion de hilo cambiaria un
+    // cuelgue por una carrera de datos.
+    private let candado = NSLock()
     private var entrada: AVCaptureDeviceInput?
     private let salida = AVCaptureVideoDataOutput()
-    private(set) var dispositivoActual: AVCaptureDevice?
+    private var _dispositivoActual: AVCaptureDevice?
+    var dispositivoActual: AVCaptureDevice? {
+        candado.lock(); defer { candado.unlock() }; return _dispositivoActual
+    }
     // Ultimo angulo de giro que la conexion acepto de verdad. Se publica al PC
     // para poder comprobar la orientacion con datos en vez de a ojo.
-    private(set) var giroAplicado: Int = 0
+    private var _giroAplicado: Int = 0
+    var giroAplicado: Int {
+        candado.lock(); defer { candado.unlock() }; return _giroAplicado
+    }
     // iOS interrumpe la captura por su cuenta (llamada entrante, otra app
     // tomando la camara, falta de recursos). Si no se mira, la app parece
     // funcionar mientras no entrega un solo fotograma.
-    private(set) var interrumpida = false
+    private var _interrumpida = false
+    var interrumpida: Bool {
+        candado.lock(); defer { candado.unlock() }; return _interrumpida
+    }
 
     // Audio. Va por su propia cola: mezclarlo con la de video haria que un
     // fotograma pesado retrasara el sonido, que es mucho mas sensible a los
     // saltos.
     private let colaAudio = DispatchQueue(label: "nexo.camara.audio")
     private let salidaAudio = AVCaptureAudioDataOutput()
-    private var entradaAudio: AVCaptureDeviceInput?
+    private var _entradaAudio: AVCaptureDeviceInput?
+    private var entradaAudio: AVCaptureDeviceInput? {
+        candado.lock(); defer { candado.unlock() }; return _entradaAudio
+    }
 
     // Entrega de fotogramas (buffer, marca de tiempo).
     var alFotograma: ((CVPixelBuffer, CMTime) -> Void)?
@@ -85,6 +109,12 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     // --- Configuracion ------------------------------------------------------
 
     func configurar(lenteID: String?, ancho: Int, alto: Int, fps: Int) {
+        colaSesion.async { [weak self] in
+            self?.configurarEnCola(lenteID: lenteID, ancho: ancho, alto: alto, fps: fps)
+        }
+    }
+
+    private func configurarEnCola(lenteID: String?, ancho: Int, alto: Int, fps: Int) {
         sesion.beginConfiguration()
         sesion.sessionPreset = .inputPriority // el formato lo fija el dispositivo
 
@@ -104,7 +134,7 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             if sesion.canAddInput(nuevaEntrada) {
                 sesion.addInput(nuevaEntrada)
                 entrada = nuevaEntrada
-                dispositivoActual = disp
+                candado.lock(); _dispositivoActual = disp; candado.unlock()
             }
         } catch {
             NSLog("Nexo: no se pudo abrir la lente: %@", error.localizedDescription)
@@ -164,17 +194,17 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
                 // Se publica al PC. Sin esto, saber que angulo acepto cada lente
                 // exige leer los logs del movil, que desde el PC no se ven: era
                 // adivinar en vez de medir.
-                giroAplicado = Int(angulo)
+                candado.lock(); _giroAplicado = Int(angulo); candado.unlock()
                 NSLog("Nexo: giro %.0f grados (%@, %@)", angulo,
                       disp.position == .front ? "frontal" : "trasera",
                       quiereVertical ? "vertical" : "horizontal")
             } else {
-                giroAplicado = 0
+                candado.lock(); _giroAplicado = 0; candado.unlock()
                 NSLog("Nexo: ningun giro admitido; se emite tal cual sale del sensor")
             }
         }
 
-        alEstado?()
+        DispatchQueue.main.async { [weak self] in self?.alEstado?() }
     }
 
     // Anade el microfono en su propia transaccion. El video ya esta funcionando
@@ -204,7 +234,7 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         sesion.beginConfiguration()
         if sesion.canAddInput(entradaMic) {
             sesion.addInput(entradaMic)
-            entradaAudio = entradaMic
+            candado.lock(); _entradaAudio = entradaMic; candado.unlock()
             salidaAudio.setSampleBufferDelegate(self, queue: colaAudio)
             if sesion.canAddOutput(salidaAudio) { sesion.addOutput(salidaAudio) }
             NSLog("Nexo: microfono anadido")
@@ -411,13 +441,13 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     func vigilarInterrupciones() {
         let c = NotificationCenter.default
         c.addObserver(forName: .AVCaptureSessionWasInterrupted, object: sesion, queue: nil) { [weak self] n in
-            self?.interrumpida = true
+            self?.fijarInterrumpida(true)
             let motivo = (n.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int) ?? -1
             NSLog("Nexo: captura interrumpida (motivo %d)", motivo)
             self?.alEstado?()
         }
         c.addObserver(forName: .AVCaptureSessionInterruptionEnded, object: sesion, queue: nil) { [weak self] _ in
-            self?.interrumpida = false
+            self?.fijarInterrumpida(false)
             NSLog("Nexo: captura reanudada")
             self?.alEstado?()
         }
@@ -429,14 +459,18 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         }
     }
 
+    private func fijarInterrumpida(_ v: Bool) {
+        candado.lock(); _interrumpida = v; candado.unlock()
+    }
+
     func arrancar() {
-        colaVideo.async { [weak self] in
+        colaSesion.async { [weak self] in
             if let s = self?.sesion, !s.isRunning { s.startRunning() }
         }
     }
 
     func parar() {
-        colaVideo.async { [weak self] in
+        colaSesion.async { [weak self] in
             if let s = self?.sesion, s.isRunning { s.stopRunning() }
         }
     }
