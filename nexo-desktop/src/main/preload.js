@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('nexo', {
   // Sin id, la orden va a todas las camaras a la vez.
   enviarControl: (orden, id) => ipcRenderer.send('nexo:control', orden, id),
   elegirPrincipal: (id) => ipcRenderer.invoke('nexo:principal', id),
+  // Desbloquea la conexion sin cerrar la aplicacion.
+  reiniciar: () => ipcRenderer.invoke('nexo:reiniciar'),
 
   // Grabacion. Vive en el proceso principal: escribe a disco sin recodificar y
   // sigue aunque la ventana este minimizada.

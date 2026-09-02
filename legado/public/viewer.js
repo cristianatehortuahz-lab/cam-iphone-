@@ -874,6 +874,42 @@ elGrabar.addEventListener('click', () => {
   return grabadora ? pararGrabacion() : empezarGrabacion();
 });
 
+// Desbloquear. Cuando el movil deja de entregar imagen con la sesion todavia en
+// pie, hasta ahora la unica salida era cerrar Nexo Desktop entero. Esto corta
+// las sesiones y deja que el sondeo las reabra, sin perder la ventana ni una
+// grabacion en curso.
+const elReconectar = $('reconectar');
+if (elReconectar) {
+  // Solo tiene sentido dentro de Nexo Desktop: en un navegador plano no hay
+  // sesion nativa que reiniciar.
+  if (window.nexo && typeof window.nexo.reiniciar === 'function') {
+    elReconectar.hidden = false;
+  }
+  elReconectar.addEventListener('click', async () => {
+    const original = elReconectar.textContent;
+    elReconectar.disabled = true;
+    elReconectar.textContent = 'Reconectando...';
+    try {
+      const r = await window.nexo.reiniciar();
+      // Se dice cuantas se cortaron: sin esto el boton parece no hacer nada
+      // cuando no habia ninguna sesion abierta, que es justo el caso en el que
+      // el usuario mas necesita saber que ha pasado.
+      elReconectar.textContent = r && r.cuantas
+        ? `Cortadas ${r.cuantas}`
+        : 'No habia sesion';
+    } catch (e) {
+      elReconectar.textContent = 'Fallo';
+      console.error('[estudio] al reconectar:', e);
+    }
+    // El sondeo tarda un par de segundos en reabrir: se deja el aviso visible
+    // ese rato y luego vuelve a su estado normal.
+    setTimeout(() => {
+      elReconectar.textContent = original;
+      elReconectar.disabled = false;
+    }, 3000);
+  });
+}
+
 elPantalla.addEventListener('click', () => {
   if (document.fullscreenElement) document.exitFullscreen();
   else elEscena.requestFullscreen();

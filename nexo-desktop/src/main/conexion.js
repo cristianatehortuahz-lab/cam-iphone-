@@ -219,6 +219,27 @@ class Conexion extends EventEmitter {
     this.emit('cambio', { evento, datos, estado: this.estado() });
   }
 
+  // Corta todas las sesiones para que el sondeo las vuelva a abrir. Es el
+  // "desbloquear" del estudio: cuando el movil deja de entregar imagen pero la
+  // sesion sigue en pie, no hay forma de salir de ahi sin cerrar la aplicacion.
+  // No se toca el temporizador de sondeo ni el servidor WiFi: la reconexion es
+  // justo lo que tiene que seguir funcionando.
+  //
+  // Una grabacion en curso NO se detiene aqui a proposito: cortar la sesion ya
+  // deja de alimentar las pistas, y parar la grabacion ademas cerraria los
+  // archivos, que es exactamente lo contrario de lo que quiere alguien
+  // intentando recuperar una toma.
+  reiniciar() {
+    const cuantas = this.sesiones.size;
+    for (const camara of this.sesiones.values()) camara.sesion.cerrar();
+    // No se vacia el mapa a mano: cada sesion emite 'fin' al cerrarse y ahi ya
+    // se retira sola, se cede el mando a otra camara y se avisa al estudio.
+    this.conectando.clear();
+    console.log(`[nexo] reinicio manual: ${cuantas} sesion(es) cortada(s)`);
+    this.#publicar('reiniciando', { cuantas });
+    return cuantas;
+  }
+
   async detener() {
     clearInterval(this.temporizadorSondeo);
     for (const camara of this.sesiones.values()) camara.sesion.cerrar();

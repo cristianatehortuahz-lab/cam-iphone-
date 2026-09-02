@@ -305,6 +305,11 @@ ipcMain.handle('nexo:estado', () => ({
 ipcMain.on('nexo:control', (_ev, orden, id) => conexion?.enviarControl(orden, id));
 
 // Cual se ve en el estudio. Grabar sigue grabandolas todas.
+// Desbloquear: corta las sesiones y deja que el sondeo las reabra. Devuelve
+// cuantas se cortaron para poder decirselo al usuario, que si no no sabe si el
+// boton hizo algo.
+ipcMain.handle('nexo:reiniciar', () => ({ ok: true, cuantas: conexion?.reiniciar() ?? 0 }));
+
 ipcMain.handle('nexo:principal', (_ev, id) => conexion?.elegirPrincipal(id) || false);
 
 // --- Grabacion --------------------------------------------------------------
