@@ -177,17 +177,26 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             // horizontal, y la frontal salia horizontal aunque pidieras vertical.
             // La orientacion elegida en el estudio se ignoraba por completo.
             //
-            // El sensor entrega apaisado, asi que para horizontal no hay que
-            // girar nada. Para vertical hay que girarlo, y la frontal necesita el
-            // sentido contrario a las traseras porque su sensor esta al reves.
-            // Horizontal no necesita giro (el sensor ya entrega apaisado) y
-            // vertical si. La frontal prueba 270 antes que 90 porque su sensor
-            // va al reves, con respaldo a lo otro si el angulo no esta admitido.
             let quiereVertical = alto > ancho
             let esFrontal = disp.position == .front
-            let preferidos: [CGFloat] = quiereVertical
-                ? (esFrontal ? [270, 90] : [90, 270])
-                : [0, 180]
+
+            // Los angulos NO se deducen: estan medidos, lente por lente, con el
+            // iPhone conectado y leyendo lo que entrega el codificador. Antes se
+            // razonaban a partir de "el sensor entrega apaisado", que es cierto
+            // en las traseras y falso en la frontal, y de ahi salia el fallo que
+            // el usuario describia como "horizontal y vertical estan cambiados".
+            //
+            //   trasera  giro 0   -> 3840x2160 (apaisado)
+            //   trasera  giro 90  -> 2160x3840 (vertical)
+            //   frontal  giro 0   -> 2160x3840 (vertical)   <- al reves
+            //   frontal  giro 270 -> 3840x2160 (apaisado)
+            //
+            // O sea: la frontal es la inversa de las traseras. Se pone primero
+            // el angulo comprobado, y detras su opuesto por si esa combinacion
+            // de lente y formato no lo admite.
+            let preferidos: [CGFloat] = esFrontal
+                ? (quiereVertical ? [0, 180] : [270, 90])
+                : (quiereVertical ? [90, 270] : [0, 180])
 
             if let angulo = preferidos.first(where: { con.isVideoRotationAngleSupported($0) }) {
                 con.videoRotationAngle = angulo
