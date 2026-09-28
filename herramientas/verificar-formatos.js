@@ -159,10 +159,16 @@ async function probar(mandar, lente, pedido, ref) {
   socket.on('data', (x) => an.feed(x));
   if (sobrante && sobrante.length) an.feed(sobrante);
   socket.write(proto.codificarSaludo({ rol: 'receptor', app: 'verificador' }));
-
   const mandar = (o) => socket.write(proto.codificarJson(proto.TRAMA.CONTROL, o));
 
-  await dormir(2000);
+  // El movil publica su estado al conectar y luego solo cuando algo cambia, asi
+  // que esperar a que llegue solo es una carrera. Cualquier orden de control le
+  // hace publicarlo, incluso una que no entienda: se pide y ya.
+  await dormir(1200);
+  for (let intento = 0; intento < 5 && !ref.ultimoEstado; intento++) {
+    mandar({ accion: 'ping-estado' });
+    await dormir(1200);
+  }
   if (!ref.ultimoEstado) {
     console.error('El iPhone no publico su estado. ¿Esta Nexo Cam abierta y en pantalla?');
     process.exit(1);
