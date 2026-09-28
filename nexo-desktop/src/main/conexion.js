@@ -91,19 +91,30 @@ class Conexion extends EventEmitter {
         if (this.sesiones.has(id) || this.conectando.has(id)) continue;
 
         this.conectando.add(id);
+        let ses;
         try {
-          const ses = await transporte.conectarCable(dispositivo.deviceID, CABLE_IPHONE);
-          this.#considerarSesion(ses, 'cable', id);
+          ses = await transporte.conectarCable(dispositivo.deviceID, CABLE_IPHONE);
         } catch (e) {
+          this.conectando.delete(id);
           // Es normal: usbmux lista el iPhone en cuanto lo enchufas, pero Nexo
           // Cam tarda unos segundos en abrir el puerto. Se reintenta al sondeo
           // siguiente.
           if (!/rechazo|puerto/i.test(e.message)) {
             console.error('[nexo] sondeo cable:', e.message);
           }
-        } finally {
-          this.conectando.delete(id);
+          continue;
         }
+
+        // Sigue "conectando" hasta que llegue el saludo o se caiga. Antes se
+        // soltaba en cuanto se abria el tunel, pero la sesion no se registra
+        // hasta el saludo, que tarda hasta 5 s: en ese hueco el sondeo de cada
+        // 2 s abria un SEGUNDO tunel, el iPhone cerraba la sesion buena para
+        // quedarse con la nueva, y el video se cortaba. 'fin' sale siempre y
+        // una sola vez (transporte.js), asi que nunca se queda retenido.
+        const soltar = () => this.conectando.delete(id);
+        ses.once('listo', soltar);
+        ses.once('fin', soltar);
+        this.#considerarSesion(ses, 'cable', id);
       }
     } catch (e) {
       console.error('[nexo] sondeo cable:', e.message);
@@ -130,6 +141,14 @@ class Conexion extends EventEmitter {
       if (this.sesiones.has(id)) return nueva.cerrar(); // gano otra carrera
       this.#adoptarSesion(nueva, origen, id, capacidades);
     });
+
+    // El saludo del iPhone puede llegar pegado a la respuesta de usbmux y
+    // procesarse en el mismo constructor de la sesion, antes de que nadie
+    // escuche 'listo': la sesion quedaba viva pero huerfana, sin adoptar. Antes
+    // se tapaba sola porque el sondeo abria otro tunel a los 2 s; desde que no
+    // hay duplicados, el iPhone ya no volvia a conectarse (28/09/2026). Si ya
+    // saludo, se atiende ahora; los 'once' de arriba lo reciben una sola vez.
+    if (nueva.autenticada && !nueva.cerrada) nueva.emit('listo', nueva.capacidadesMovil);
   }
 
   #adoptarSesion(nueva, origen, id, capacidades) {
