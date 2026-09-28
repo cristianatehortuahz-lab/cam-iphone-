@@ -69,6 +69,11 @@ void main() {
   uv *= u_escala; // recorte al formato de salida, en el espacio de la fuente
   uv.x *= u_espejo;
   v_uv = uv * 0.5 + 0.5;
+  // El volteo vertical se hace aqui, y no con UNPACK_FLIP_Y_WEBGL al subir la
+  // textura: esa bandera saca al VideoFrame de la ruta rapida cero-copia de
+  // Chromium y obliga a una conversion por fotograma. Va al final, despues de
+  // giro, recorte y espejo, asi que es equivalente exacta a voltear la imagen.
+  v_uv.y = 1.0 - v_uv.y;
   gl_Position = vec4(a_pos, 0.0, 1.0);
 }`;
 
@@ -211,7 +216,9 @@ class ProcesadorImagen {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    // Sin UNPACK_FLIP_Y_WEBGL a proposito: el volteo lo hace el shader de
+    // vertices. Con la bandera puesta, Chromium no puede subir el VideoFrame
+    // por la ruta cero-copia GPU->GPU.
 
     this.u = {};
     for (const nombre of [
@@ -263,6 +270,13 @@ class ProcesadorImagen {
     this.activo = false;
     if (this.pendiente) cancelAnimationFrame(this.pendiente);
     this.pendiente = null;
+    // Soltar el fotograma retenido. Sin esto se filtra un VideoFrame de GPU en
+    // cada parada, y obs.html vuelve a conectar cada 1500 ms: unas cuantas
+    // reconexiones agotan el pool del decodificador y la imagen se detiene.
+    if (this.frameExterno) {
+      this.frameExterno.close();
+      this.frameExterno = null;
+    }
   }
 
   #bucle() {
@@ -289,6 +303,13 @@ class ProcesadorImagen {
   ponerFrameExterno(vf) {
     if (this.frameExterno) this.frameExterno.close();
     this.frameExterno = vf;
+    // Dibujar ya, sin esperar al siguiente tick de requestAnimationFrame: si
+    // entre dos ticks llegaban dos fotogramas, el primero se cerraba sin
+    // haberse dibujado nunca. Ademas rAF va al ritmo del compositor, que no
+    // esta en fase con la cadencia de la camara, y ese batido se ve.
+    // El bucle sigue vivo para la ruta <video> (WebRTC); cuando ya se ha
+    // dibujado aqui, alli encuentra frameExterno a null y sale enseguida.
+    if (this.activo) this.dibujar();
   }
 
   dibujar() {
@@ -334,9 +355,18 @@ class ProcesadorImagen {
     gl.bindTexture(gl.TEXTURE_2D, this.textura);
 
     try {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, fuente);
+      // RGBA, no RGB: es el formato nativo de los VideoFrame en Chromium. Con
+      // RGB hay que convertir cada fotograma, y a 8 megapixeles eso son
+      // cientos de MB/s de trabajo evitable.
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, fuente);
     } catch {
-      return; // fotograma aun no disponible
+      // Fotograma aun no disponible. Hay que soltarlo igual: los VideoFrame son
+      // de un solo uso y el pool del decodificador es finito.
+      if (vf) {
+        vf.close();
+        this.frameExterno = null;
+      }
+      return;
     }
 
     // Los VideoFrame son de un solo uso: se cierran despues de subirlos.

@@ -15,6 +15,13 @@ const { rutaLegado } = require('./clave');
 
 const RECURSOS = path.join(__dirname, '..', '..', 'recursos');
 
+// Hora en cada linea del registro. Sin ella no habia forma de cruzar un corte
+// de sesion o una orden al movil con un salto en el video.
+for (const nivel of ['log', 'warn', 'error']) {
+  const original = console[nivel].bind(console);
+  console[nivel] = (...args) => original(new Date().toISOString().slice(11, 23), ...args);
+}
+
 let ventana = null;
 let bandeja = null;
 let servidor = null; // referencia devuelta por legado.iniciar()
@@ -22,6 +29,11 @@ let conexion = null; // orquestador de Nexo Cam (usbmux + WiFi)
 let ajustes = null;
 const grabador = new Grabador();
 let saliendoDeVerdad = false;
+
+// Mientras la ventana esta oculta no se le manda video (ahorra una decodificacion
+// 4K entera). Al reaparecer hay que esperar a un fotograma clave para reenganchar
+// sin pintar basura.
+let estudioEsperandoClave = false;
 
 // Una sola instancia: el segundo arranque solo enfoca la ventana existente.
 if (!app.requestSingleInstanceLock()) {
@@ -82,15 +94,35 @@ async function iniciarConexionNativa() {
       // OBS. Mandar las demas seria gastar IPC y ancho de banda para nada.
       if (id !== conexion.principal) return;
 
-      if (ventana && !ventana.isDestroyed()) {
-        ventana.webContents.send('nexo:video', v);
+      // El flag que manda el movil se queda corto: hay IDR que llegan marcadas
+      // como delta. Lo confirmamos con el bitstream una sola vez aqui, y ese
+      // valor ya sirve para todo lo de abajo y viaja en la carga hacia OBS.
+      const clave = v.clave || protocolo.esFotogramaClave(v.datos);
+
+      // Al estudio solo si la ventana esta a la vista. Con la fuente de OBS
+      // abierta, el mismo 4K se decodificaba dos veces en paralelo (aqui y en
+      // el CEF de OBS) mas dos pipelines WebGL; en una GPU integrada eso no
+      // cabe y la imagen llegaba a OBS a pocos fotogramas por segundo.
+      // Minimizado a la bandeja, el estudio no gasta nada.
+      const verEstudio =
+        ventana && !ventana.isDestroyed() && ventana.isVisible() && !ventana.isMinimized();
+
+      if (!verEstudio) {
+        estudioEsperandoClave = true;
+      } else {
+        // Al volver de la bandeja hay que reenganchar en una clave: entrar a
+        // mitad de GOP deja al decodificador pintando bloques corruptos hasta
+        // la siguiente IDR, que puede tardar dos segundos.
+        if (estudioEsperandoClave && clave) estudioEsperandoClave = false;
+        if (!estudioEsperandoClave) ventana.webContents.send('nexo:video', v);
       }
+
       // Y a los navegadores que lo pidan (la fuente de OBS). Por cable el
       // iPhone no participa en la senalizacion WebRTC, asi que sin esto la
       // salida a OBS se queda en negro con el estudio recibiendo imagen.
       if (servidor && servidor.difundirVideo) {
         servidor.difundirVideo(
-          protocolo.codificarCargaMedia(v.microsegundos, v.datos, { clave: v.clave })
+          protocolo.codificarCargaMedia(v.microsegundos, v.datos, { clave })
         );
       }
     },
@@ -302,7 +334,12 @@ ipcMain.handle('nexo:estado', () => ({
 
 // El renderer manda ordenes al iPhone (cambiar de lente, zoom, etc.). Sin id
 // van a todas las camaras a la vez.
-ipcMain.on('nexo:control', (_ev, orden, id) => conexion?.enviarControl(orden, id));
+ipcMain.on('nexo:control', (_ev, orden, id) => {
+  // Queda en el registro: cambiar resolucion, fps o lente reconfigura la camara
+  // del movil y congela la imagen un momento, y una orden repetida no se veia.
+  console.log('[nexo] orden al movil:', JSON.stringify(orden));
+  conexion?.enviarControl(orden, id);
+});
 
 // Cual se ve en el estudio. Grabar sigue grabandolas todas.
 // Desbloquear: corta las sesiones y deja que el sondeo las reabra. Devuelve

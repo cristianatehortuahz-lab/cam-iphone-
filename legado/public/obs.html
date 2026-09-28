@@ -113,6 +113,20 @@
         typeof DecodificadorVideo !== 'undefined'
           ? new DecodificadorVideo({
               onFrame: (frame) => {
+                const ahora = performance.now();
+                if (telemetria.ultimo) {
+                  const hueco = ahora - telemetria.ultimo;
+                  telemetria.huecoMax = Math.max(telemetria.huecoMax, hueco);
+                  // Donde cae el hueco respecto al fotograma clave: antes de
+                  // pintarlo, justo despues, o en otro sitio.
+                  const esClave = telemetria.clavesTs.delete(frame.timestamp);
+                  const campo = esClave ? 'antesClave' : telemetria.previoFueClave ? 'trasClave' : 'otros';
+                  telemetria[campo] = Math.max(telemetria[campo], hueco);
+                  telemetria.previoFueClave = esClave;
+                }
+                telemetria.ultimo = ahora;
+                telemetria.pintados++;
+                ultimoPintado = ahora;
                 // El procesador se queda el frame y lo cierra al dibujarlo.
                 procesador.ponerFrameExterno(frame);
                 if (primerNativo) {
@@ -121,7 +135,14 @@
                   primerNativo = false;
                 }
               },
-              onError: (e) => console.error('[obs] decoder:', e.message || e),
+              onError: (e) => {
+                console.error('[obs] decoder:', e.message || e);
+                // Antes solo se anotaba el error y la imagen se quedaba rota
+                // para siempre. Cerrar deja el decodificador listo para
+                // recrearse y volver a exigir fotograma clave: la salida se
+                // recupera sola en cuanto llegue el siguiente IDR.
+                decodificador.cerrar();
+              },
             })
           : null;
 
@@ -132,8 +153,81 @@
         const micros = Number(vista.getBigUint64(0));
         const clave = (vista.getUint8(8) & 1) !== 0;
         nativoActivo = true;
+        ultimaTrama = performance.now();
+        telemetria.llegadas++;
+        if (clave || DecodificadorVideo.esFotogramaClave(new Uint8Array(datos, 9))) {
+          telemetria.clavesTs.add(micros);
+        }
         decodificador.decodificar(new Uint8Array(datos, 9), micros, clave);
       }
+
+      // Vigilante. Si llegan tramas pero no se pinta nada en varios segundos,
+      // la pagina se ha quedado colgada: paso el 28/09/2026 tras reiniciar Nexo
+      // Desktop varias veces, y la fuente de OBS se quedo en negro hasta pulsar
+      // "Actualizar". Se recarga sola, que es justo lo que arreglaba ese boton.
+      // Tres fotogramas clave de margen (llegan cada 2 s) para no confundirlo
+      // con la espera normal a una clave, y sin llegada no hace nada: el movil
+      // en segundo plano no es un cuelgue.
+      const PLAZO_COLGADO = 6000;
+      let ultimaTrama = 0;
+      let ultimoPintado = performance.now();
+
+      // Telemetria hacia el registro de Nexo Desktop, cada 5 s: tramas que
+      // llegan, fotogramas pintados y el hueco mas largo entre dos pintados. Es
+      // la unica forma de saber si la fuente de OBS va a ritmo, porque no se
+      // puede inspeccionar desde fuera.
+      const telemetria = {
+        llegadas: 0, pintados: 0, huecoMax: 0, ultimo: 0,
+        antesClave: 0, trasClave: 0, otros: 0, previoFueClave: false,
+        clavesTs: new Set(),
+      };
+      setInterval(() => {
+        if (!telemetria.llegadas) return;
+        enviar({
+          tipo: 'estadistica',
+          origen: 'obs',
+          llegadas: telemetria.llegadas,
+          pintados: telemetria.pintados,
+          huecoMaxMs: telemetria.huecoMax,
+          antesClaveMs: telemetria.antesClave,
+          trasClaveMs: telemetria.trasClave,
+          otrosMs: telemetria.otros,
+          visible: document.visibilityState !== 'hidden',
+        });
+        telemetria.llegadas = 0;
+        telemetria.pintados = 0;
+        telemetria.huecoMax = 0;
+        telemetria.antesClave = 0;
+        telemetria.trasClave = 0;
+        telemetria.otros = 0;
+        // Marcas de claves que nunca salieron (descartadas): no acumularlas.
+        if (telemetria.clavesTs.size > 20) telemetria.clavesTs.clear();
+      }, 5000);
+
+      setInterval(() => {
+        const ahora = performance.now();
+        const llegando = ahora - ultimaTrama < 1000;
+        // Oculta no es colgada: en segundo plano Chromium estrangula el
+        // decodificador y casi no pinta (medido: 7 de 326 tramas en 10 s). Sin
+        // esta condicion, el vigilante recargaba una pagina sana.
+        if (document.visibilityState === 'hidden') {
+          ultimoPintado = ahora;
+          return;
+        }
+        if (!llegando || ahora - ultimoPintado < PLAZO_COLGADO) return;
+        // Como mucho una recarga cada 30 s, para no entrar en bucle si el fallo
+        // no se va con recargar.
+        let ultima = 0;
+        try {
+          ultima = Number(sessionStorage.getItem('nexo-obs-recarga') || 0);
+          if (Date.now() - ultima < 30000) return;
+          sessionStorage.setItem('nexo-obs-recarga', String(Date.now()));
+        } catch {
+          /* sin almacenamiento: se recarga igual */
+        }
+        console.warn('[obs] llegan tramas pero no se pinta nada: recargando');
+        location.reload();
+      }, 1000);
 
       function enviar(m) {
         if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m));

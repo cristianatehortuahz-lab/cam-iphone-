@@ -73,6 +73,27 @@ function codificarCargaMedia(microsegundos, datos, { clave = false } = {}) {
   return Buffer.concat([cab, datos]);
 }
 
+// El flag de clave que manda Nexo Cam no es de fiar: hay fotogramas con una IDR
+// de verdad que llegan marcados como delta. El bitstream si lo dice, asi que
+// quien necesite decidir de verdad (a quien se le puede tirar un fotograma, o
+// donde reengancharse tras un corte) mira aqui. Es la misma comprobacion que
+// hace DecodificadorVideo.esFotogramaClave en el renderer.
+//
+// Sale en la primera NAL que decide, asi que solo mira unos pocos bytes.
+function esFotogramaClave(datos) {
+  for (let i = 0; i + 3 < datos.length; i++) {
+    const codigo3 = datos[i] === 0 && datos[i + 1] === 0 && datos[i + 2] === 1;
+    const codigo4 = datos[i] === 0 && datos[i + 1] === 0 && datos[i + 2] === 0 && datos[i + 3] === 1;
+    if (codigo3 || codigo4) {
+      const tipoNal = datos[i + (codigo4 ? 4 : 3)] & 0x1f;
+      if (tipoNal === 5) return true; // IDR
+      if (tipoNal === 7 || tipoNal === 8) return true; // SPS/PPS acompanan a la clave
+      if (tipoNal === 1) return false; // slice no-IDR: delta
+    }
+  }
+  return false;
+}
+
 function codificarJson(tipo, obj) {
   return codificarTrama(tipo, Buffer.from(JSON.stringify(obj), 'utf8'));
 }
@@ -194,6 +215,7 @@ module.exports = {
   codificarTrama,
   codificarMedia,
   codificarCargaMedia,
+  esFotogramaClave,
   codificarJson,
   Analizador,
 };
