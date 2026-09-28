@@ -38,8 +38,16 @@
     }
   }
 
+  // Telemetria hacia el registro de Nexo Desktop, igual que la de la fuente de
+  // OBS: tramas que llegan, fotogramas pintados y el hueco mas largo entre dos.
+  const telemetria = { llegadas: 0, pintados: 0, huecoMax: 0, ultimo: 0 };
+
   const decodificador = new DecodificadorVideo({
     onFrame: (frame) => {
+      const ahora = performance.now();
+      if (telemetria.ultimo) telemetria.huecoMax = Math.max(telemetria.huecoMax, ahora - telemetria.ultimo);
+      telemetria.ultimo = ahora;
+      telemetria.pintados++;
       // El procesador cierra el frame despues de usarlo (los VideoFrame son
       // recursos de GPU y hay que liberarlos cuanto antes).
       const proc = window.procesador;
@@ -83,8 +91,24 @@
     const datos = v.datos instanceof Uint8Array
       ? v.datos
       : new Uint8Array(v.datos.buffer || v.datos, v.datos.byteOffset || 0, v.datos.length || v.datos.byteLength);
+    telemetria.llegadas++;
     decodificador.decodificar(datos, v.microsegundos, v.clave);
   });
+
+  setInterval(() => {
+    if (!telemetria.llegadas || typeof window.enviar !== 'function') return;
+    window.enviar({
+      tipo: 'estadistica',
+      origen: 'estudio',
+      llegadas: telemetria.llegadas,
+      pintados: telemetria.pintados,
+      huecoMaxMs: telemetria.huecoMax,
+      visible: document.visibilityState !== 'hidden',
+    });
+    telemetria.llegadas = 0;
+    telemetria.pintados = 0;
+    telemetria.huecoMax = 0;
+  }, 5000);
 
   // Traduce el estado del transporte nativo a algo util en la pantalla de
   // espera. Antes siempre decia "conecta el iPhone por el cable" aunque el
@@ -206,7 +230,18 @@
     }
     // El iPhone publica lentes, zoom, bateria... por el transporte nativo, no
     // por el WebSocket, asi que hay que llevarlo a mano a la interfaz.
-    if (c.evento === 'estado-movil') pintarEstado(c.datos);
+    //
+    // Desde el estudio multicamara (1d31454) el evento trae { id, estado } y no
+    // el estado a secas, pero aqui se seguia pasando entero: el estudio no se
+    // enteraba de nada de lo que cambiaba en el movil despues de cargar. Medido
+    // el 28/09/2026: el desplegable decia "4K horizontal" con el movil
+    // entregando 2160x3840. Solo manda la camara principal, que es la que se ve;
+    // con varias, cada una pisaria el estado de la otra.
+    if (c.evento === 'estado-movil') {
+      const d = c.datos || {};
+      const principal = c.estado && c.estado.principal;
+      if (!principal || d.id === principal) pintarEstado(d.estado || d);
+    }
 
     // Publicar el estado para que viewer.js pueda mostrarlo (icono en la UI).
     window.dispatchEvent(new CustomEvent('nexo:conexion', { detail: c }));

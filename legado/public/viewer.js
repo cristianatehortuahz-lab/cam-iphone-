@@ -65,6 +65,17 @@ let firmaFormatos = '';
 // si hace falta bajar (movil caliente, disco justo, red que no da).
 let mostrarTodasCalidades = false;
 
+// Lo que el usuario eligio en el estudio, aparte de lo que el movil dice estar
+// haciendo. El iPhone no recuerda nada entre arranques: tras cada re-firma, o
+// cuando iOS lo cierra en segundo plano, vuelve a su valor de fabrica (4K
+// vertical). Y una orden dada mientras conectaba se perdia por el camino.
+// Medido el 28/09/2026: el estudio decia "4K horizontal" y llegaba 2160x3840.
+// Con esto se le vuelve a pedir lo elegido cada vez que su estado no coincide.
+const CLAVE_INTENCION = 'nexo-intencion-camara';
+let intencion = cargarIntencion();
+let ultimoReenvio = 0;
+let reenvios = 0;
+
 const procesador = new ProcesadorImagen(elVideo);
 // El puente Nexo Desktop -> Electron necesita alcanzar el procesador para
 // entregarle VideoFrame decodificados (ver puente.js). En navegador plano,
@@ -223,6 +234,69 @@ function cargarImagenGuardada() {
   }
 }
 
+function cargarIntencion() {
+  try {
+    const guardada = JSON.parse(localStorage.getItem(CLAVE_INTENCION) || 'null');
+    return guardada && typeof guardada === 'object' ? guardada : {};
+  } catch {
+    return {}; // dato corrupto: sin intencion, manda lo que diga el movil
+  }
+}
+
+function guardarIntencion() {
+  try {
+    localStorage.setItem(CLAVE_INTENCION, JSON.stringify(intencion));
+  } catch {
+    /* almacenamiento bloqueado: se olvida al cerrar, no es critico */
+  }
+}
+
+// Si el movil esta haciendo otra cosa que lo elegido, se lo vuelve a pedir.
+//
+// No hay riesgo de bucle: el movil devuelve en su estado la resolucion y los
+// fps que se le pidieron, asi que tras aplicarlos coincide y esto se calla. Aun
+// asi lleva espera y tope: el movil tarda en reconfigurar la camara, y
+// insistir en pleno directo la reiniciaria cada pocos segundos.
+function reconciliarIntencion(msg) {
+  const fpsBien = !intencion.fps || !msg.fps || Number(msg.fps) === intencion.fps;
+  const resBien = !intencion.resolucion || !msg.resolucion || msg.resolucion === intencion.resolucion;
+  if (fpsBien && resBien) {
+    reenvios = 0;
+    return;
+  }
+  if (reenvios >= 3 || Date.now() - ultimoReenvio < 4000) return;
+
+  // Primero los fps: de ellos depende que resoluciones ofrece la lente.
+  if (!fpsBien) {
+    reenvios++;
+    ultimoReenvio = Date.now();
+    ordenar('cambiar-fps', intencion.fps);
+    return;
+  }
+
+  // Si esta lente no da lo elegido, no se insiste: manda el movil. Se mira la
+  // lista completa que publica el movil, no las opciones visibles: el 4K de la
+  // frontal esta detras de "Otras calidades" y no se re-aplicaba nunca.
+  const fps = Number(msg.fps) || 30;
+  const utiles = (msg.formatos || []).filter((f) => !f.fpsMax || f.fpsMax >= fps);
+  if (!formatoDe(intencion.resolucion, utiles)) return;
+  reenvios++;
+  ultimoReenvio = Date.now();
+  ordenar('cambiar-resolucion', intencion.resolucion);
+}
+
+// El formato del sensor al que corresponde una resolucion "AxB", en cualquier
+// orientacion (el sensor los publica siempre apaisados). Null si esta lente no
+// lo da.
+function formatoDe(valor, formatos) {
+  if (!valor) return null;
+  const [a, b] = String(valor).split('x').map(Number);
+  if (!a || !b) return null;
+  const largo = Math.max(a, b);
+  const corto = Math.min(a, b);
+  return formatos.find((f) => f.largo === largo && f.corto === corto) || null;
+}
+
 // ---------------------------------------------------------------------------
 // Senalizacion
 // ---------------------------------------------------------------------------
@@ -235,10 +309,16 @@ function ordenar(accion, valor) {
   // Por la ruta nativa (Nexo Cam por cable) el iPhone no esta en la
   // senalizacion WebSocket —no se registra como 'movil'—, asi que una orden
   // enviada por ahi no la recibe nadie. Va por el transporte de Nexo.
-  if (window.nexoNativoActivo && window.nexo && window.nexo.enviarControl) {
+  //
+  // Dentro de Nexo Desktop va SIEMPRE por el cable, no solo con video ya
+  // llegando: antes esperaba al primer fotograma, y lo que se eligiera mientras
+  // el movil conectaba salia por el WebSocket y se perdia sin aviso. Sin sesion
+  // abierta, el proceso principal simplemente no la manda a nadie.
+  if (window.nexo && window.nexo.enviarControl) {
     window.nexo.enviarControl({ accion, valor });
-    return;
+    if (window.nexoNativoActivo) return;
   }
+  // La ruta WebRTC (iPhone por Safari) solo escucha el WebSocket.
   enviar({ tipo: 'control', accion, valor });
 }
 
@@ -310,7 +390,18 @@ function pintarFormatos(msg) {
   // 4K). Asi el caso normal es una eleccion entre vertical y horizontal, no
   // entre catorce lineas.
   const mejor = Math.max(...utiles.map((f) => f.largo));
-  const aMostrar = mostrarTodasCalidades ? utiles : utiles.filter((f) => f.largo === mejor);
+  const aMostrar = mostrarTodasCalidades ? utiles.slice() : utiles.filter((f) => f.largo === mejor);
+
+  // Lo que el movil esta haciendo, y lo que se eligio, tienen que poder verse
+  // aunque no sean la mejor calidad. Sin esto, con la frontal (cuya mejor
+  // calidad es 4032x3024) el 4K quedaba fuera de la lista y el desplegable caia
+  // en la primera opcion: decia "3024p vertical" con el movil entregando
+  // 3840x2160. Medido el 28/09/2026.
+  for (const valor of [msg.resolucion, intencion.resolucion]) {
+    const f = formatoDe(valor, utiles);
+    if (f && !aMostrar.includes(f)) aMostrar.push(f);
+  }
+  aMostrar.sort((x, y) => y.largo - x.largo);
 
   // Cada formato del sensor da dos opciones: en vertical y en horizontal.
   const opciones = [];
@@ -374,6 +465,8 @@ function pintarEstadoMovil(msg) {
   }
 
   pintarFormatos(msg);
+  // Despues de pintar: necesita la lista de formatos de esta lente ya hecha.
+  reconciliarIntencion(msg);
 
   if (msg.hint && document.activeElement !== elHint) elHint.value = msg.hint;
 
@@ -733,7 +826,16 @@ function pararGrabacion() {
 // ---------------------------------------------------------------------------
 
 elLente.addEventListener('change', () => ordenar('cambiar-lente', elLente.value));
-elResolucion.addEventListener('change', () => ordenar('cambiar-resolucion', elResolucion.value));
+elResolucion.addEventListener('change', () => {
+  intencion.resolucion = elResolucion.value;
+  reenvios = 0;
+  guardarIntencion();
+  ordenar('cambiar-resolucion', elResolucion.value);
+  // Un <select> se queda con el foco despues de elegir, y mientras lo tiene el
+  // estado del movil no se pinta en el (ver pintarFormatos): mostraba una
+  // eleccion que el movil no habia aplicado. Soltarlo lo evita.
+  elResolucion.blur();
+});
 if (elMasCalidades) {
   elMasCalidades.addEventListener('click', () => {
     mostrarTodasCalidades = !mostrarTodasCalidades;
@@ -743,6 +845,10 @@ if (elMasCalidades) {
 }
 
 elFps.addEventListener('change', () => {
+  intencion.fps = Number(elFps.value);
+  reenvios = 0;
+  guardarIntencion();
+  elFps.blur();
   ordenar('cambiar-fps', elFps.value);
   // La lista de resoluciones depende de los fps: a 60 hay menos formatos. Se
   // olvida la firma para que el proximo estado del movil la rehaga.
