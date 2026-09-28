@@ -5,11 +5,15 @@ import AVFoundation
 // que pinta la sesion de captura directamente, sin pasar por el codificador.
 struct VistaPrevia: UIViewRepresentable {
     let sesion: AVCaptureSession
+    // Recibe la capa ya creada, para que la camara la gire. Sin esto nadie le
+    // fijaba el angulo y, con el movil en horizontal, la previa salia tumbada.
+    var alCrearCapa: @MainActor (AVCaptureVideoPreviewLayer) -> Void = { _ in }
 
     func makeUIView(context: Context) -> VistaCapa {
         let v = VistaCapa()
         v.capaPrevia.session = sesion
         v.capaPrevia.videoGravity = .resizeAspect
+        alCrearCapa(v.capaPrevia)
         return v
     }
 

@@ -15,7 +15,7 @@ struct VistaPrincipal: View {
             Color(red: 0.043, green: 0.051, blue: 0.063).ignoresSafeArea()
 
             if permisoConcedido {
-                VistaPrevia(sesion: modelo.sesionCamara)
+                VistaPrevia(sesion: modelo.sesionCamara, alCrearCapa: modelo.registrarCapaPrevia)
                     .ignoresSafeArea()
             } else if permisoDenegado {
                 // Sin camara la app no hace NADA: preparar() es quien arranca el

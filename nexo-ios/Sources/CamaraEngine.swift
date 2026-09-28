@@ -49,6 +49,23 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     var giroAplicado: Int {
         candado.lock(); defer { candado.unlock() }; return _giroAplicado
     }
+    // El angulo que, segun iOS, deja el horizonte recto con el movil tal como se
+    // sostiene ahora. Se publica junto al aplicado: si difieren en 90 grados, el
+    // movil esta en vertical con horizontal pedido (o al reves).
+    private var _giroHorizonte: Int = 0
+    var giroHorizonte: Int {
+        candado.lock(); defer { candado.unlock() }; return _giroHorizonte
+    }
+
+    // Coordinador de giro de Apple: sabe, para cada lente, que angulo deja la
+    // imagen derecha segun como se sostiene el movil, y avisa cuando cambia.
+    // Se rehace con cada configuracion. Solo se tocan en colaSesion.
+    private var coordinador: AVCaptureDevice.RotationCoordinator?
+    private var observaciones: [NSKeyValueObservation] = []
+    private var quiereVertical = true
+    // La capa de la vista previa del propio iPhone. La crea la interfaz y la
+    // registra aqui; debil porque es suya.
+    private weak var _capaPrevia: AVCaptureVideoPreviewLayer?
     // iOS interrumpe la captura por su cuenta (llamada entrante, otra app
     // tomando la camara, falta de recursos). Si no se mira, la app parece
     // funcionar mientras no entrega un solo fotograma.
@@ -166,52 +183,12 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         // aplicado y sin conexion sobre la que fijar el giro.
         anadirAudioSiSePuede()
 
-        // Orientacion vertical (contenido para redes). Va DESPUES del commit y
-        // comprobando que el angulo esta soportado: dentro del bloque de
+        // Orientacion. Va DESPUES del commit: dentro del bloque de
         // configuracion, cambiar activeFormat justo antes puede rehacer la
-        // conexion y perder el angulo, y asignar uno no soportado se ignora en
-        // silencio. Si esto no se aplica, la camara entrega apaisado.
-        if let con = salida.connection(with: .video), #available(iOS 17.0, *) {
-            // El giro depende de lo que se PIDE, no es fijo. Antes se aplicaban
-            // 90 grados siempre: las traseras salian verticales aunque pidieras
-            // horizontal, y la frontal salia horizontal aunque pidieras vertical.
-            // La orientacion elegida en el estudio se ignoraba por completo.
-            //
-            let quiereVertical = alto > ancho
-            let esFrontal = disp.position == .front
-
-            // Los angulos NO se deducen: estan medidos, lente por lente, con el
-            // iPhone conectado y leyendo lo que entrega el codificador. Antes se
-            // razonaban a partir de "el sensor entrega apaisado", que es cierto
-            // en las traseras y falso en la frontal, y de ahi salia el fallo que
-            // el usuario describia como "horizontal y vertical estan cambiados".
-            //
-            //   trasera  giro 0   -> 3840x2160 (apaisado)
-            //   trasera  giro 90  -> 2160x3840 (vertical)
-            //   frontal  giro 0   -> 2160x3840 (vertical)   <- al reves
-            //   frontal  giro 270 -> 3840x2160 (apaisado)
-            //
-            // O sea: la frontal es la inversa de las traseras. Se pone primero
-            // el angulo comprobado, y detras su opuesto por si esa combinacion
-            // de lente y formato no lo admite.
-            let preferidos: [CGFloat] = esFrontal
-                ? (quiereVertical ? [0, 180] : [270, 90])
-                : (quiereVertical ? [90, 270] : [0, 180])
-
-            if let angulo = preferidos.first(where: { con.isVideoRotationAngleSupported($0) }) {
-                con.videoRotationAngle = angulo
-                // Se publica al PC. Sin esto, saber que angulo acepto cada lente
-                // exige leer los logs del movil, que desde el PC no se ven: era
-                // adivinar en vez de medir.
-                candado.lock(); _giroAplicado = Int(angulo); candado.unlock()
-                NSLog("Nexo: giro %.0f grados (%@, %@)", angulo,
-                      disp.position == .front ? "frontal" : "trasera",
-                      quiereVertical ? "vertical" : "horizontal")
-            } else {
-                candado.lock(); _giroAplicado = 0; candado.unlock()
-                NSLog("Nexo: ningun giro admitido; se emite tal cual sale del sensor")
-            }
-        }
+        // conexion y perder el angulo. Si no se aplica, la camara entrega tal
+        // cual sale del sensor.
+        quiereVertical = alto > ancho
+        prepararGiro(disp)
 
         DispatchQueue.main.async { [weak self] in self?.alEstado?() }
     }
@@ -249,6 +226,100 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             NSLog("Nexo: microfono anadido")
         }
         sesion.commitConfiguration()
+    }
+
+    // --- Giro -----------------------------------------------------------------
+
+    // La interfaz entrega aqui la capa de su vista previa, para girarla con el
+    // mismo coordinador que la salida. Sin esto la previa del propio iPhone se
+    // quedaba en el angulo por defecto y, con el movil en horizontal, salia
+    // tumbada dentro de una franja vertical. Medido el 28/09/2026.
+    func registrarCapaPrevia(_ capa: AVCaptureVideoPreviewLayer) {
+        candado.lock(); _capaPrevia = capa; candado.unlock()
+        colaSesion.async { [weak self] in
+            guard let self, let disp = self.dispositivoActual else { return }
+            self.prepararGiro(disp)
+        }
+    }
+
+    // Crea el coordinador para la lente activa, aplica los angulos y los
+    // mantiene al dia cuando cambia la forma de sostener el movil. Corre en
+    // colaSesion.
+    private func prepararGiro(_ disp: AVCaptureDevice) {
+        observaciones.removeAll()
+        candado.lock(); let capa = _capaPrevia; candado.unlock()
+        let coord = AVCaptureDevice.RotationCoordinator(device: disp, previewLayer: capa)
+        coordinador = coord
+        let esFrontal = disp.position == .front
+
+        aplicarGiroSalida(horizonte: coord.videoRotationAngleForHorizonLevelCapture, esFrontal: esFrontal)
+        observaciones.append(coord.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.new]) { [weak self] _, cambio in
+            guard let angulo = cambio.newValue else { return }
+            self?.colaSesion.async { self?.aplicarGiroSalida(horizonte: angulo, esFrontal: esFrontal) }
+        })
+
+        if let capa {
+            aplicarGiroPrevia(capa, coord.videoRotationAngleForHorizonLevelPreview)
+            observaciones.append(coord.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.new]) { [weak self, weak capa] _, cambio in
+                guard let angulo = cambio.newValue, let capa else { return }
+                self?.aplicarGiroPrevia(capa, angulo)
+            })
+        }
+    }
+
+    // El estudio decide la PROPORCION (vertical u horizontal); el coordinador,
+    // HACIA QUE LADO. Antes el angulo era fijo por proporcion y lente, y
+    // sostener el movil en horizontal "al reves" daba la imagen boca abajo: la
+    // proporcion era buena, el lado no. Medido el 28/09/2026.
+    //
+    // Que pareja de angulos da cada proporcion SI esta medida, lente por lente
+    // (64c7106), y se comprobo otra vez el 28/09/2026 pidiendo cada una por orden
+    // explicita desde el estudio:
+    //
+    //   trasera  0 / 180  -> 3840x2160 (apaisado)
+    //   trasera  90 / 270 -> 2160x3840 (vertical)
+    //   frontal  0 / 180  -> 2160x3840 (vertical)   <- al reves
+    //   frontal  90 / 270 -> 3840x2160 (apaisado)
+    //
+    // De la pareja se usa el angulo mas cercano al que deja el horizonte recto.
+    // Si empatan —el movil se sostiene al contrario de lo pedido, en vertical con
+    // horizontal elegido— no hay forma de enderezarlo sin cambiar la proporcion,
+    // y se queda el primero, que es el que se usaba siempre.
+    private func aplicarGiroSalida(horizonte: CGFloat, esFrontal: Bool) {
+        guard let con = salida.connection(with: .video) else { return }
+        let pareja: [CGFloat] = esFrontal
+            ? (quiereVertical ? [0, 180] : [270, 90])
+            : (quiereVertical ? [90, 270] : [0, 180])
+        let preferidos = distanciaAngular(pareja[1], horizonte) < distanciaAngular(pareja[0], horizonte)
+            ? [pareja[1], pareja[0]]
+            : pareja
+
+        guard let angulo = preferidos.first(where: { con.isVideoRotationAngleSupported($0) }) else {
+            candado.lock(); _giroAplicado = 0; _giroHorizonte = Int(horizonte); candado.unlock()
+            NSLog("Nexo: ningun giro admitido; se emite tal cual sale del sensor")
+            return
+        }
+        if con.videoRotationAngle != angulo { con.videoRotationAngle = angulo }
+        // Se publica al PC. Sin esto, saber que angulo acepto cada lente exige
+        // leer los logs del movil, que desde el PC no se ven.
+        candado.lock(); _giroAplicado = Int(angulo); _giroHorizonte = Int(horizonte); candado.unlock()
+        NSLog("Nexo: giro %.0f (horizonte %.0f, %@, %@)", angulo, horizonte,
+              esFrontal ? "frontal" : "trasera", quiereVertical ? "vertical" : "horizontal")
+    }
+
+    // La previa no tiene proporcion pedida: se endereza sin mas. Toca una capa,
+    // asi que va en el hilo principal.
+    private func aplicarGiroPrevia(_ capa: AVCaptureVideoPreviewLayer, _ angulo: CGFloat) {
+        DispatchQueue.main.async {
+            guard let con = capa.connection, con.isVideoRotationAngleSupported(angulo) else { return }
+            con.videoRotationAngle = angulo
+        }
+    }
+
+    // Separacion entre dos angulos en grados, por el camino corto (0...180).
+    private func distanciaAngular(_ a: CGFloat, _ b: CGFloat) -> CGFloat {
+        let d = abs(a - b).truncatingRemainder(dividingBy: 360)
+        return min(d, 360 - d)
     }
 
     // Para poder ver desde el PC si la captura esta viva. Sin esto, "no llegan

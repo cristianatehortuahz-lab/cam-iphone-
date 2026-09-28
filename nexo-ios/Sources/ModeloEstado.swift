@@ -281,6 +281,12 @@ final class ModeloEstado: ObservableObject {
             "capacidades": camara.capacidades(),
             "audio": camara.hayAudio,
             "giro": camara.giroAplicado,
+            // El que deja el horizonte recto segun como se sostiene el movil. Si
+            // coincide con el aplicado, la imagen sale derecha; si difiere en 90,
+            // el movil se sostiene al contrario de lo pedido (en vertical con
+            // horizontal elegido). Una diferencia de 180 era el fallo de antes:
+            // imagen boca abajo.
+            "giroHorizonte": camara.giroHorizonte,
             "captura": camara.diagnostico(),
         ]
         // La resolucion de arriba es la PEDIDA. Estas dos son la realidad, y sin
@@ -302,5 +308,11 @@ final class ModeloEstado: ObservableObject {
         lenteActualID = id
         aplicarCamara()
         publicarEstado()
+    }
+
+    // La vista entrega la capa de su previa para que la camara la gire igual
+    // que la salida.
+    func registrarCapaPrevia(_ capa: AVCaptureVideoPreviewLayer) {
+        camara.registrarCapaPrevia(capa)
     }
 }
