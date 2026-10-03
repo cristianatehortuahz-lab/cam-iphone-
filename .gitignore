@@ -22,6 +22,8 @@ DerivedData/
 *.xcarchive
 
 # --- Ajustes locales del usuario ---
+# config-pc.json: interfaz de audio y rutas de cada PC (lo escribe el instalador).
+config-pc.json
 ajustes.json
 config.local.json
 *.local.json

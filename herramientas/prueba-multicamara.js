@@ -7,15 +7,21 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const RAIZ = 'C:/Users/Usuario/Documents/proyectos de software/cawebfhone';
+const RAIZ = path.join(__dirname, '..');
 const { Conexion } = require(RAIZ + '/nexo-desktop/src/main/conexion.js');
 const { Grabador } = require(RAIZ + '/nexo-desktop/src/main/grabador.js');
 const proto = require(RAIZ + '/nexo-desktop/src/main/protocolo.js');
 const clave = require(RAIZ + '/nexo-desktop/src/main/clave.js');
 const { WIFI } = require(RAIZ + '/nexo-desktop/src/main/puertos.js');
 
-const S = 'C:/Users/Usuario/AppData/Local/Temp/claude/C--Users-Usuario-Documents-proyectos-de-software-cawebfhone/fed86b9a-24eb-4f09-a37a-14c4ef4a502e/scratchpad';
-const flujo = fs.readFileSync(path.join(S, 'muestra.h264'));
+// Un trozo de H.264 Annex-B del iPhone. No va en el repo (pesa): se pasa la
+// ruta como argumento, o se deja en la carpeta temporal como muestra.h264.
+const muestra = process.argv[2] || path.join(os.tmpdir(), 'muestra.h264');
+if (!fs.existsSync(muestra)) {
+  console.error(`Falta la muestra de video: ${muestra}\nUso: node herramientas/prueba-multicamara.js <muestra.h264>`);
+  process.exit(1);
+}
+const flujo = fs.readFileSync(muestra);
 const k = clave.obtener();
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 
