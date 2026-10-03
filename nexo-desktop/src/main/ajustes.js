@@ -12,6 +12,9 @@ const POR_DEFECTO = {
   minimizarABandeja: true,
   cerrarVaABandeja: true,
   modo: 'nativo', // 'nativo' (embebido) | 'navegador' (solo servidor + navegador externo)
+  // Audio de FL hacia un dispositivo de Windows (TikTok LIVE Studio). Solo suena
+  // si ese dispositivo existe: ver salida-audio.js.
+  salidaAudioFL: { activa: true, dispositivo: 'CABLE Input' },
 };
 
 class Ajustes {

@@ -21,6 +21,14 @@ const path = require('path');
 
 const NOMBRE_COOKIE = 'camclave';
 
+// Nombres que son este mismo PC. 127.0.0.1.nip.io es un DNS publico que
+// devuelve 127.0.0.1: hace falta porque la fuente "Enlace" de TikTok LIVE Studio
+// rechaza localhost y las IP (solo acepta nombres con dominio). Es tan local
+// como 127.0.0.1: ninguna web ajena puede servir paginas con ese origen, porque
+// apunta a este PC. Un ataque de DNS rebinding llegaria con el origen del
+// atacante, no con este.
+const ANFITRIONES_LOCALES = ['localhost', '127.0.0.1', '127.0.0.1.nip.io'];
+
 function cargarClave(directorio) {
   const archivo = path.join(directorio, 'clave.txt');
   try {
@@ -99,8 +107,7 @@ function crearGuardia(clave) {
       const anfitrion = o.hostname;
       const puerto = Number(o.port) || (o.protocol === 'https:' ? 443 : 80);
       const anfitrionValido =
-        anfitrion === 'localhost' ||
-        anfitrion === '127.0.0.1' ||
+        ANFITRIONES_LOCALES.includes(anfitrion) ||
         /^[\d.]+$/.test(anfitrion); // una IP de la red local
       return anfitrionValido && puertos.includes(puerto);
     } catch {

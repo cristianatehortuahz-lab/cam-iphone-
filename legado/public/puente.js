@@ -42,12 +42,36 @@
   // OBS: tramas que llegan, fotogramas pintados y el hueco mas largo entre dos.
   const telemetria = { llegadas: 0, pintados: 0, huecoMax: 0, ultimo: 0 };
 
+  // Lo mismo, pero para el panel "Datos" del estudio, que lo lee cada segundo.
+  // Va aparte porque la telemetria se vacia cada 5 s al mandarla al registro.
+  const medidor = { bytes: 0, pintados: 0, huecoMax: 0, desde: performance.now(), ancho: 0, alto: 0 };
+  window.nexoMedidor = () => {
+    const ahora = performance.now();
+    const seg = Math.max((ahora - medidor.desde) / 1000, 0.001);
+    const r = {
+      ancho: medidor.ancho,
+      alto: medidor.alto,
+      fps: medidor.pintados / seg,
+      bytesPorSegundo: medidor.bytes / seg,
+      huecoMaxMs: medidor.huecoMax,
+      porHardware: decodificador.porHardware,
+    };
+    medidor.bytes = medidor.pintados = medidor.huecoMax = 0;
+    medidor.desde = ahora;
+    return r;
+  };
+
   const decodificador = new DecodificadorVideo({
     onFrame: (frame) => {
       const ahora = performance.now();
-      if (telemetria.ultimo) telemetria.huecoMax = Math.max(telemetria.huecoMax, ahora - telemetria.ultimo);
+      if (telemetria.ultimo) {
+        const hueco = ahora - telemetria.ultimo;
+        telemetria.huecoMax = Math.max(telemetria.huecoMax, hueco);
+        medidor.huecoMax = Math.max(medidor.huecoMax, hueco);
+      }
       telemetria.ultimo = ahora;
       telemetria.pintados++;
+      medidor.pintados++;
       // El procesador cierra el frame despues de usarlo (los VideoFrame son
       // recursos de GPU y hay que liberarlos cuanto antes).
       const proc = window.procesador;
@@ -62,6 +86,8 @@
       // textura y lo cierra, y un VideoFrame cerrado mide 0x0.
       const ancho = frame.displayWidth;
       const alto = frame.displayHeight;
+      medidor.ancho = ancho;
+      medidor.alto = alto;
 
       proc.ponerFrameExterno(frame);
 
@@ -79,6 +105,7 @@
         // WebRTC al recibir su pista de video.
         if (window.habilitarControles) window.habilitarControles(true);
         pintarEstado(ultimoEstado);
+        if (window.refrescarCabecera) window.refrescarCabecera();
         primerFrame = false;
         console.log('[puente] primer fotograma en pantalla: ' + ancho + 'x' + alto);
       }
@@ -92,6 +119,7 @@
       ? v.datos
       : new Uint8Array(v.datos.buffer || v.datos, v.datos.byteOffset || 0, v.datos.length || v.datos.byteLength);
     telemetria.llegadas++;
+    medidor.bytes += datos.byteLength;
     decodificador.decodificar(datos, v.microsegundos, v.clave);
   });
 
@@ -252,7 +280,13 @@
   // principal lo tiene guardado: se recupera al arrancar.
   if (typeof window.nexo.estado === 'function') {
     window.nexo.estado().then((e) => {
-      if (e && e.conexion) { pintarEstadoCable(e.conexion); pintarCamaras(e.conexion); }
+      if (e && e.conexion) {
+        pintarEstadoCable(e.conexion);
+        pintarCamaras(e.conexion);
+        // La cabecera del estudio escucha este evento; sin el, hasta el primer
+        // cambio de conexion seguiria diciendo lo que pinte la senalizacion.
+        window.dispatchEvent(new CustomEvent('nexo:conexion', { detail: { evento: 'inicial', estado: e.conexion } }));
+      }
       if (e && e.conexion && e.conexion.estadoMovil) pintarEstado(e.conexion.estadoMovil);
     }).catch(() => {});
   }

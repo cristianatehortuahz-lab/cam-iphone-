@@ -1,0 +1,134 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Nexo - salida de audio de FL</title>
+<script>
+'use strict';
+
+// Ventana oculta de salida-audio.js: reproduce el audio de FL en el dispositivo
+// pedido (por defecto "CABLE Input", de VB-Cable) y en ningun otro.
+
+const buscado = (new URLSearchParams(location.search).get('dispositivo') || 'CABLE Input').toLowerCase();
+
+// Colchon de ~80 ms entre lo que llega y lo que suena. El audio viene al ritmo
+// del reloj de la M-Audio y sale al del cable, que nunca van exactamente
+// iguales: cuando el colchon se aleja del objetivo se salta o se repite UNA
+// muestra por bloque de 128 (inaudible), en vez de acabar cortando o
+// acumulando retraso. Si se vacia (un atasco), calla y vuelve a llenarse.
+const PROCESADOR = `
+class SalidaFL extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.cap = sampleRate * 2;
+    this.l = new Float32Array(this.cap);
+    this.r = new Float32Array(this.cap);
+    this.lee = 0;
+    this.escribe = 0;
+    this.lleno = 0;
+    this.objetivo = Math.round(sampleRate * 0.08);
+    this.enMarcha = false;
+    this.port.onmessage = (e) => this.meter(e.data.l, e.data.r);
+  }
+  meter(l, r) {
+    for (let i = 0; i < l.length; i++) {
+      this.l[this.escribe] = l[i];
+      this.r[this.escribe] = r[i];
+      this.escribe = (this.escribe + 1) % this.cap;
+      if (this.lleno < this.cap) this.lleno++;
+      else this.lee = (this.lee + 1) % this.cap;
+    }
+    // Muy por detras (tras un atasco): salta al presente en vez de arrastrar el retraso.
+    if (this.lleno > this.objetivo * 4) {
+      const sobra = this.lleno - this.objetivo;
+      this.lee = (this.lee + sobra) % this.cap;
+      this.lleno -= sobra;
+    }
+  }
+  process(_entradas, salidas) {
+    const out = salidas[0];
+    const n = out[0].length;
+    if (!this.enMarcha) {
+      if (this.lleno < this.objetivo) return true;
+      this.enMarcha = true;
+    }
+    if (this.lleno < n) {
+      this.enMarcha = false;
+      return true;
+    }
+    const repetir = this.lleno < this.objetivo * 0.5;
+    const saltar = this.lleno > this.objetivo * 1.5;
+    for (let i = 0; i < n; i++) {
+      out[0][i] = this.l[this.lee];
+      if (out[1]) out[1][i] = this.r[this.lee];
+      if (repetir && i === n >> 1) continue;
+      this.lee = (this.lee + 1) % this.cap;
+      this.lleno--;
+    }
+    if (saltar && this.lleno > 0) {
+      this.lee = (this.lee + 1) % this.cap;
+      this.lleno--;
+    }
+    return true;
+  }
+}
+registerProcessor('salida-fl', SalidaFL);
+`;
+
+let dispositivo = null; // { deviceId, label }
+let ctx = null;
+let nodo = null;
+let fsActual = 0;
+let preparando = null;
+
+async function buscarDispositivo() {
+  const lista = await navigator.mediaDevices.enumerateDevices();
+  return lista.find((d) => d.kind === 'audiooutput' && d.label.toLowerCase().includes(buscado)) || null;
+}
+
+async function preparar(fs) {
+  if (ctx) await ctx.close().catch(() => {});
+  ctx = new AudioContext({ sampleRate: fs, latencyHint: 'interactive' });
+  const url = URL.createObjectURL(new Blob([PROCESADOR], { type: 'application/javascript' }));
+  await ctx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
+  nodo = new AudioWorkletNode(ctx, 'salida-fl', { outputChannelCount: [2] });
+  nodo.connect(ctx.destination);
+  await ctx.setSinkId(dispositivo.deviceId);
+  await ctx.resume();
+  fsActual = fs;
+}
+
+async function revisar() {
+  try {
+    const d = await buscarDispositivo();
+    const antes = dispositivo && dispositivo.deviceId;
+    dispositivo = d;
+    if (!d) {
+      // Sin cable no suena nada: se cierra para no caer al dispositivo por defecto.
+      if (ctx) { await ctx.close().catch(() => {}); ctx = null; nodo = null; fsActual = 0; }
+    } else if (ctx && d.deviceId !== antes) {
+      await ctx.setSinkId(d.deviceId);
+    }
+    window.salida.estado({ encontrado: Boolean(d), etiqueta: d ? d.label : null });
+  } catch (e) {
+    window.salida.estado({ encontrado: false, error: e.message });
+  }
+}
+
+window.salida.onPcm(async (pcm) => {
+  if (!dispositivo) return;
+  try {
+    if (!ctx || pcm.fs !== fsActual) {
+      if (!preparando) preparando = preparar(pcm.fs).finally(() => { preparando = null; });
+      await preparando;
+    }
+    if (nodo) nodo.port.postMessage({ l: pcm.l, r: pcm.r });
+  } catch (e) {
+    window.salida.estado({ encontrado: Boolean(dispositivo), error: e.message });
+  }
+});
+
+navigator.mediaDevices.addEventListener('devicechange', revisar);
+revisar();
+// Por si VB-Cable se instala con Nexo abierto y no llega el aviso de cambio.
+setInterval(revisar, 5000);
+</script>

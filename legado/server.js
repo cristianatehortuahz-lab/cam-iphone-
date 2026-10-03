@@ -65,6 +65,9 @@ div{max-width:380px}h1{font-size:19px;margin:0 0 12px}p{color:#8b97a8;font-size:
 <p>Esta camara solo es accesible con el enlace correcto. Abre la direccion que aparece
 en el estudio del PC, o escanea el codigo QR.</p></div></body></html>`;
 
+// La pone iniciar() con lo que le pase Nexo Desktop; la lee /api/nexo.
+let fuenteEstadoNexo = null;
+
 function servirEstatico(req, res) {
   // Todo el cuerpo va en try/catch: una excepcion sincrona aqui, sin recoger,
   // se convierte en uncaughtException y mata el proceso. Para algo que emite en
@@ -131,6 +134,23 @@ function servirEstatico(req, res) {
           urlMovil: principal ? urlMovil(principal.ip) : null,
         })
       );
+    }
+
+    // Solo desde el propio PC: es para el script de inicio del directo, y no
+    // tiene por que saber nada de esto el movil que entra con la clave.
+    if (ruta === '/api/nexo') {
+      if (!acceso.esLocal(req)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('Prohibido');
+      }
+      let estado = null;
+      try {
+        estado = fuenteEstadoNexo ? fuenteEstadoNexo() : null;
+      } catch (e) {
+        estado = { error: e.message };
+      }
+      res.writeHead(200, { ...cabeceras, 'Content-Type': TIPOS['.json'] });
+      return res.end(JSON.stringify(estado));
     }
 
     const destino = path.join(PUBLIC_DIR, path.normalize(ruta));
@@ -360,7 +380,11 @@ function iniciarSenalizacion(servidor) {
 // Arranca los servidores y devuelve referencias e informacion. NO llama a
 // process.exit: cuando corre embebido dentro de Electron, matar el proceso
 // tumbaria toda la app. Los errores se lanzan para que quien llama decida.
-async function iniciar({ silencioso = false } = {}) {
+// estadoNexo: funcion que da el estado de Nexo Desktop (iPhone por cable, audio
+// de FL). La sirve /api/nexo, que usa herramientas/iniciar-directo.ps1 para
+// comprobar que todo esta listo antes de un directo.
+async function iniciar({ silencioso = false, estadoNexo = null } = {}) {
+  fuenteEstadoNexo = estadoNexo;
   const log = silencioso ? () => {} : (...a) => console.log(...a);
 
   const interfaces = listarIPs();

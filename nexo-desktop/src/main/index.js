@@ -6,6 +6,8 @@ const { Ajustes } = require('./ajustes');
 const { Conexion } = require('./conexion');
 const protocolo = require('./protocolo');
 const { Grabador } = require('./grabador');
+const { PuenteAudio } = require('./puente-audio');
+const { SalidaAudio } = require('./salida-audio');
 const { rutaLegado } = require('./clave');
 
 // El servidor legado (auditado) corre embebido dentro de la app: sirve el
@@ -27,6 +29,9 @@ let bandeja = null;
 let servidor = null; // referencia devuelta por legado.iniciar()
 let conexion = null; // orquestador de Nexo Cam (usbmux + WiFi)
 let ajustes = null;
+let puenteAudio = null; // FL Studio -> OBS por ReaStream (ver puente-audio.js)
+let salidaAudio = null; // FL Studio -> VB-Cable -> TikTok LIVE Studio (ver salida-audio.js)
+let salidaAudioEstado = { encontrado: false, etiqueta: null };
 const grabador = new Grabador();
 let saliendoDeVerdad = false;
 
@@ -49,6 +54,7 @@ async function arrancar() {
 
   await iniciarServidor();
   await iniciarConexionNativa();
+  await iniciarPuenteAudio();
   crearVentana();
   crearBandeja();
   aplicarArranqueConWindows();
@@ -63,7 +69,7 @@ async function arrancar() {
 async function iniciarServidor() {
   try {
     const legado = require(rutaLegado('server.js'));
-    servidor = await legado.iniciar({ silencioso: true });
+    servidor = await legado.iniciar({ silencioso: true, estadoNexo });
     console.log('[nexo] servidor legado en', servidor.puertos, 'cable:', servidor.hayCable);
   } catch (err) {
     // Si el puerto esta ocupado o falla, la app sigue abriendo y lo muestra;
@@ -71,6 +77,76 @@ async function iniciarServidor() {
     console.error('[nexo] no se pudo iniciar el servidor:', err.mensajeUsuario || err.message);
     servidor = null;
   }
+}
+
+// Lo que consulta herramientas/iniciar-directo.ps1 (por /api/nexo) para dar el
+// visto bueno antes de un directo. Solo lectura.
+function estadoNexo() {
+  const e = conexion ? conexion.estado() : null;
+  const movil = (e && e.estadoMovil) || {};
+  return {
+    iphone: {
+      conectado: Boolean(e && e.conectado),
+      origen: (e && e.origen) || null,
+      hayCable: Boolean(e && e.hayCable),
+      // Atiende las ordenes del estudio. Puede ser falso con el video llegando.
+      responde: Boolean(e && e.conectado && e.responde),
+      transmitiendo: Boolean(movil.transmitiendo),
+      resolucion: movil.resolucion || null,
+      resolucionReal: movil.resolucionReal || null,
+      fps: movil.fps || null,
+    },
+    audioFL: { puente: Boolean(puenteAudio), llega: audioFLLlega },
+    salidaTikTok: { activa: salidaAudioEstado.encontrado, dispositivo: salidaAudioEstado.etiqueta },
+    grabando: grabador.grabando,
+  };
+}
+
+// --- Audio de FL Studio hacia OBS -------------------------------------------
+
+let audioFLLlega = false;
+
+async function iniciarPuenteAudio() {
+  puenteAudio = new PuenteAudio();
+  puenteAudio.on('estado', (llega) => {
+    audioFLLlega = llega;
+    console.log(llega ? '[audio] llega FL por ReaStream' : '[audio] FL dejo de enviar');
+  });
+  puenteAudio.on('error', (e) => console.error('[audio] puente:', e.message));
+  try {
+    await puenteAudio.iniciar();
+    console.log('[audio] puente ReaStream listo');
+  } catch (e) {
+    // Sin puente, OBS sigue recibiendo si se abrio antes que FL.
+    console.error('[audio] no se pudo abrir el puente ReaStream:', e.message);
+    puenteAudio = null;
+    return;
+  }
+  iniciarSalidaAudio();
+}
+
+// El mismo audio de FL, reproducido en VB-Cable para TikTok LIVE Studio. El
+// puente solo desmonta los paquetes mientras el cable existe.
+function iniciarSalidaAudio() {
+  const conf = ajustes.get('salidaAudioFL');
+  if (!conf || !conf.activa) return;
+  salidaAudio = new SalidaAudio({ dispositivo: conf.dispositivo });
+  let primera = true;
+  salidaAudio.on('estado', (e) => {
+    const antes = salidaAudioEstado;
+    salidaAudioEstado = { encontrado: Boolean(e.encontrado), etiqueta: e.etiqueta || null };
+    if (e.error) console.error('[audio] salida a', conf.dispositivo + ':', e.error);
+    if (!primera && antes.encontrado === salidaAudioEstado.encontrado) return;
+    primera = false;
+    puenteAudio.activarSalida(salidaAudioEstado.encontrado);
+    console.log(
+      salidaAudioEstado.encontrado
+        ? `[audio] FL sale tambien por ${salidaAudioEstado.etiqueta}`
+        : `[audio] no hay "${conf.dispositivo}": FL no sale por ningun dispositivo extra`
+    );
+  });
+  puenteAudio.on('pcm', (pcm) => salidaAudio.enviar(pcm));
+  salidaAudio.iniciar();
 }
 
 // --- Conexion nativa con Nexo Cam ------------------------------------------
@@ -81,7 +157,11 @@ async function iniciarConexionNativa() {
     // Se reenvia al renderer, que lo mete en el decodificador WebCodecs.
     ipcAudio: (a, id) => {
       if (id !== conexion.principal) return; // solo se oye la camara principal
-      if (ventana && !ventana.isDestroyed()) {
+      // Como el video: solo con el estudio a la vista. Oculto, decodificar el
+      // audio del iPhone no sirve a nadie (la grabacion va por el proceso
+      // principal) y su renderer seguia gastando ~14 % de CPU en la bandeja
+      // (medido el 30/09/2026 con OBS y TikTok abiertos, el PC al limite).
+      if (ventana && !ventana.isDestroyed() && ventana.isVisible() && !ventana.isMinimized()) {
         ventana.webContents.send('nexo:audio', a);
       }
     },
@@ -152,16 +232,44 @@ async function iniciarConexionNativa() {
 
 // --- Ventana principal ------------------------------------------------------
 
+const MIN_ANCHO = 940;
+const MIN_ALTO = 620;
+const ANCHO_INICIAL = 1280;
+const ALTO_INICIAL = 800;
+
+// El tamano guardado encoge solo. Con dos pantallas a distinta escala (portatil
+// al 125 %, monitor externo al 100 %), Electron devuelve el tamano de la ventana
+// del monitor externo dividido por 1,25: se abrio a 1280x800 y guardo 1024x640
+// (medido el 28/09/2026). Cada apertura la dejaba un 20 % mas pequena hasta el
+// minimo, y asi aparecio el 753x497 que la abria en miniatura. Por eso el
+// tamano guardado nunca baja del inicial. Y una posicion en un monitor que ya
+// no esta la abriria fuera de la vista.
+function limitesGuardados(v) {
+  const { screen } = require('electron');
+  const limites = {
+    width: Math.max(v.ancho || 0, ANCHO_INICIAL),
+    height: Math.max(v.alto || 0, ALTO_INICIAL),
+  };
+  // La posicion se conserva aunque el tamano no valga: dice en que monitor
+  // trabaja el usuario, y maximizada tiene que abrirse en ese.
+  if (v.x != null && v.y != null) {
+    const r = { x: v.x, y: v.y, width: limites.width, height: limites.height };
+    const area = screen.getDisplayMatching(r).workArea;
+    const visible =
+      r.x < area.x + area.width && r.x + r.width > area.x &&
+      r.y < area.y + area.height && r.y + r.height > area.y;
+    if (visible) Object.assign(limites, { x: v.x, y: v.y });
+  }
+  return limites;
+}
+
 function crearVentana() {
   const v = ajustes.get('ventana');
 
   ventana = new BrowserWindow({
-    width: v.ancho,
-    height: v.alto,
-    x: v.x ?? undefined,
-    y: v.y ?? undefined,
-    minWidth: 940,
-    minHeight: 620,
+    ...limitesGuardados(v),
+    minWidth: MIN_ANCHO,
+    minHeight: MIN_ALTO,
     backgroundColor: '#0b0d10',
     show: false,
     icon: path.join(RECURSOS, 'icono.ico'),
@@ -210,6 +318,11 @@ function crearVentana() {
     if (!saliendoDeVerdad && ajustes.get('cerrarVaABandeja')) {
       e.preventDefault();
       ventana.hide();
+    } else if (!saliendoDeVerdad) {
+      // La ventana oculta del audio (salida-audio.js) tambien cuenta: sin esto
+      // 'window-all-closed' no llegaria nunca y la app seguiria viva sin ventana.
+      e.preventDefault();
+      salir();
     }
   });
 }
@@ -220,14 +333,20 @@ function guardarTamanoAlCambiar() {
     if (!ventana || ventana.isDestroyed()) return;
     clearTimeout(temporizador);
     temporizador = setTimeout(() => {
+      if (ventana.isDestroyed()) return;
+      // Minimizada u oculta en la bandeja, Windows da medidas que no son las de
+      // la ventana: guardarlas es como acababa abriendose en miniatura.
+      if (ventana.isMinimized() || !ventana.isVisible()) return;
       const maximizada = ventana.isMaximized();
-      const b = ventana.getBounds();
+      // getNormalBounds: el tamano "normal" aunque ahora este maximizada.
+      const b = ventana.getNormalBounds();
       const actual = ajustes.get('ventana');
       ajustes.set('ventana', {
         ...actual,
         maximizada,
-        // Solo guardamos el tamano "normal", no el de maximizada.
-        ...(maximizada ? {} : { ancho: b.width, alto: b.height, x: b.x, y: b.y }),
+        ...(b.width >= MIN_ANCHO && b.height >= MIN_ALTO
+          ? { ancho: b.width, alto: b.height, x: b.x, y: b.y }
+          : {}),
       });
     }, 400);
   };
@@ -269,6 +388,7 @@ function refrescarMenuBandeja() {
     { label: estado, enabled: false },
     { type: 'separator' },
     { label: 'Abrir el estudio', click: mostrarVentana },
+    { label: 'Abrir ventana de camara para TikTok', enabled: Boolean(servidor), click: abrirVentanaTikTok },
     {
       label: 'Copiar direccion del iPhone',
       enabled: Boolean(servidor),
@@ -298,6 +418,29 @@ function refrescarMenuBandeja() {
   bandeja.setContextMenu(menu);
 }
 
+// --- Ventana de la camara para TikTok ---------------------------------------
+
+// TikTok LIVE Studio captura esta ventana (herramientas/ventana-camara). Es de
+// instancia unica: si ya esta abierta, la segunda llamada solo la trae delante.
+// Va como proceso aparte, con sus propias opciones de Chromium para pintar aunque
+// este tapada, que aqui afectarian tambien al estudio.
+//
+// En la version empaquetada (instalador) habra que llevar la ventana dentro de
+// la app: process.execPath sera Nexo.exe y no un electron.exe que ejecute scripts.
+function abrirVentanaTikTok() {
+  const script = path.join(__dirname, '..', '..', '..', 'herramientas', 'ventana-camara', 'main.js');
+  if (!require('fs').existsSync(script)) {
+    console.error('[nexo] no encuentro la ventana de camara:', script);
+    return false;
+  }
+  const { spawn } = require('child_process');
+  spawn(process.execPath, [script, '1:1'], { detached: true, stdio: 'ignore' }).unref();
+  console.log('[nexo] ventana de camara para TikTok');
+  return true;
+}
+
+ipcMain.handle('nexo:ventana-tiktok', () => abrirVentanaTikTok());
+
 // --- Arranque con Windows ---------------------------------------------------
 
 function aplicarArranqueConWindows() {
@@ -317,6 +460,8 @@ async function salir() {
     if (grabador.grabando) await grabador.parar(conexion?.camaras() || []);
     if (conexion) await conexion.detener();
     if (servidor) await servidor.detener();
+    if (salidaAudio) salidaAudio.detener();
+    if (puenteAudio) puenteAudio.detener();
   } catch {
     /* da igual: estamos saliendo */
   }

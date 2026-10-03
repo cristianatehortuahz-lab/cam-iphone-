@@ -18,6 +18,7 @@ const { Anunciante } = require('./descubrimiento');
 const { CABLE_IPHONE, WIFI } = require('./puertos');
 
 const INTERVALO_SONDEO = 2000; // ms entre comprobaciones de usbmux
+const PLAZO_ACUSE = 6000; // ms que se le dan al movil para contestar a una orden
 
 class Conexion extends EventEmitter {
   constructor({ ipcVideo, ipcAudio } = {}) {
@@ -152,7 +153,7 @@ class Conexion extends EventEmitter {
   }
 
   #adoptarSesion(nueva, origen, id, capacidades) {
-    const camara = { id, origen, sesion: nueva, capacidades, estadoMovil: null };
+    const camara = { id, origen, sesion: nueva, capacidades, estadoMovil: null, ordenSinAcuse: null };
     this.sesiones.set(id, camara);
     // El primero que llega manda en el estudio; los demas se graban igual.
     if (!this.principal) this.principal = id;
@@ -166,6 +167,7 @@ class Conexion extends EventEmitter {
       // cuando algo cambia. La sesion puede abrirse antes de que exista la
       // ventana, y ese unico envio —con la lista de lentes— se perderia.
       camara.estadoMovil = estado;
+      camara.ordenSinAcuse = null;
       this.#publicar('estado-movil', { id, estado });
     });
 
@@ -197,12 +199,13 @@ class Conexion extends EventEmitter {
   // Sin id, la orden va a TODAS: util para empezar a grabar o poner la misma
   // resolucion en todos los angulos de una vez.
   enviarControl(orden, id = null) {
-    if (id) {
-      const camara = this.sesiones.get(id);
-      if (camara) camara.sesion.enviarControl(orden);
-      return;
+    const destinos = id ? [this.sesiones.get(id)].filter(Boolean) : [...this.sesiones.values()];
+    for (const camara of destinos) {
+      camara.sesion.enviarControl(orden);
+      // El movil contesta a cada orden con su estado. Se apunta la mas antigua
+      // sin contestar para poder decir que dejo de responder (ver estado()).
+      if (!camara.ordenSinAcuse) camara.ordenSinAcuse = Date.now();
     }
-    for (const camara of this.sesiones.values()) camara.sesion.enviarControl(orden);
   }
 
   camaras() {
@@ -231,6 +234,9 @@ class Conexion extends EventEmitter {
       // ahora daban por hecho una sola camara.
       origen: this.sesiones.get(this.principal)?.origen || null,
       estadoMovil: this.sesiones.get(this.principal)?.estadoMovil || null,
+      // Falso si lleva mas de PLAZO_ACUSE con una orden sin contestar: la app
+      // del iPhone colgada, aunque el video siga llegando (01/10/2026).
+      responde: Date.now() - (this.sesiones.get(this.principal)?.ordenSinAcuse || Infinity) < PLAZO_ACUSE,
     };
   }
 

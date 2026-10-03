@@ -109,6 +109,17 @@ const ZONAS_UI = {
 // movil sin inventarnos numeros.
 const ETIQUETAS_RES = { 720: '720p', 1080: '1080p', 1440: '1440p', 1944: '4:3 alto', 2160: '4K' };
 
+// Nombre de un formato del sensor. El lado corto solo no basta: el iPhone da
+// 1920x1080 y 1440x1080, y los dos salian como "1080p horizontal". Se anade la
+// proporcion cuando no es la panoramica de siempre (16:9).
+function nombreFormato(f) {
+  const base = ETIQUETAS_RES[f.corto] || `${f.corto}p`;
+  const proporcion = f.largo / f.corto;
+  if (Math.abs(proporcion - 16 / 9) < 0.02) return base;
+  if (Math.abs(proporcion - 4 / 3) < 0.02) return base.includes('4:3') ? base : `${base} 4:3`;
+  return `${base} (${f.largo}x${f.corto})`;
+}
+
 // Cada fila del panel de imagen. Los limites (min/max) NO se repiten aqui: se
 // leen de RANGOS (procesador.js), que es la fuente unica que ademas usa el
 // shader para recortar. Aqui solo van titulo, paso de deslizador y formato.
@@ -157,11 +168,82 @@ function habilitarControles(activos) {
   }
 }
 
+// Dentro de Nexo Desktop el iPhone llega por el cable nativo (usbmux), y ese
+// cable no es una interfaz de red: /api/info lo daba por "sin cable". Tampoco se
+// registra en la senalizacion WebSocket, que pintaba "Esperando al iPhone" o
+// "iPhone desconectado" con el video entrando. Con sesion nativa manda su
+// estado; la senalizacion solo pinta la cabecera cuando no la hay (la ruta por
+// Safari sigue de reserva).
+let infoRed = null;
+let estadoNativo = null;
+
+function hayNativo() {
+  return Boolean(estadoNativo && estadoNativo.conectado);
+}
+
+function pintarEnlace() {
+  if (!infoRed) return;
+  let via = infoRed.cable ? 'cable USB' : 'sin cable';
+  if (estadoNativo) {
+    if (hayNativo()) via = estadoNativo.origen === 'wifi' ? 'WiFi' : 'cable USB';
+    else via = estadoNativo.hayCable ? 'cable USB' : 'sin cable';
+  }
+  elEnlace.innerHTML = `${via} · <b>${infoRed.urlMovil}</b>`;
+}
+
+// El movil contesta a cada orden publicando su estado. Si no contesta, la app
+// del iPhone esta colgada aunque el video siga llegando. Paso el 01/10/2026 tras
+// un cambio de calidad: el estudio mostraba cada eleccion como aplicada y el
+// movil no habia atendido ninguna.
+const PLAZO_ACUSE = 6000;
+let movilMudo = false;
+let esperaAcuse = null;
+
+function esperarAcuse() {
+  if (esperaAcuse || !hayNativo()) return;
+  esperaAcuse = setTimeout(() => {
+    esperaAcuse = null;
+    movilMudo = true;
+    pintarCabeceraNativa();
+  }, PLAZO_ACUSE);
+}
+
+function acuseRecibido() {
+  clearTimeout(esperaAcuse);
+  esperaAcuse = null;
+  if (!movilMudo) return;
+  movilMudo = false;
+  pintarCabeceraNativa();
+}
+
+function pintarCabeceraNativa() {
+  const e = estadoNativo;
+  if (!e) return;
+  const via = e.origen === 'wifi' ? 'WiFi' : 'cable';
+  if (e.conectado && movilMudo) marcarEstado('El iPhone no responde: cierra Nexo Cam y vuelve a abrirla', 'error');
+  else if (e.conectado && window.nexoNativoActivo) marcarEstado(`En directo por ${via}`, 'ok');
+  else if (e.conectado) marcarEstado(`iPhone conectado por ${via}, esperando video…`, 'aviso');
+  else if (e.hayCable) marcarEstado('iPhone detectado: abre Nexo Cam', 'aviso');
+  else marcarEstado('Esperando al iPhone…', 'aviso');
+  // Por cable la app del iPhone no atiende esta orden (solo la ruta WebRTC, que
+  // la aplica a la pista): mostrarla seria un control que no hace nada.
+  elHint.hidden = hayNativo();
+  pintarEnlace();
+}
+// puente.js la llama al primer fotograma: pasa de "esperando video" a directo.
+window.refrescarCabecera = pintarCabeceraNativa;
+
+window.addEventListener('nexo:conexion', (ev) => {
+  if (!ev.detail || !ev.detail.estado) return;
+  estadoNativo = ev.detail.estado;
+  pintarCabeceraNativa();
+});
+
 async function mostrarDireccion() {
   try {
-    const info = await (await fetch('/api/info')).json();
-    if (elDireccion) elDireccion.textContent = info.urlMovil;
-    elEnlace.innerHTML = `${info.cable ? 'cable USB' : 'sin cable'} · <b>${info.urlMovil}</b>`;
+    infoRed = await (await fetch('/api/info')).json();
+    if (elDireccion) elDireccion.textContent = infoRed.urlMovil;
+    pintarEnlace();
   } catch {
     elEnlace.textContent = '';
   }
@@ -316,6 +398,7 @@ function ordenar(accion, valor) {
   // abierta, el proceso principal simplemente no la manda a nadie.
   if (window.nexo && window.nexo.enviarControl) {
     window.nexo.enviarControl({ accion, valor });
+    esperarAcuse();
     if (window.nexoNativoActivo) return;
   }
   // La ruta WebRTC (iPhone por Safari) solo escucha el WebSocket.
@@ -344,13 +427,13 @@ function conectar() {
 
     switch (msg.tipo) {
       case 'bienvenida':
-        marcarEstado('Esperando al iPhone…', 'aviso');
+        if (!hayNativo()) marcarEstado('Esperando al iPhone…', 'aviso');
         break;
       case 'movil-conectado':
-        marcarEstado('iPhone conectado, negociando…', 'aviso');
+        if (!hayNativo()) marcarEstado('iPhone conectado, negociando…', 'aviso');
         break;
       case 'movil-desconectado':
-        marcarEstado('iPhone desconectado', 'error');
+        if (!hayNativo()) marcarEstado('iPhone desconectado', 'error');
         cerrar();
         break;
       case 'oferta':
@@ -406,7 +489,7 @@ function pintarFormatos(msg) {
   // Cada formato del sensor da dos opciones: en vertical y en horizontal.
   const opciones = [];
   for (const f of aMostrar) {
-    const etiqueta = ETIQUETAS_RES[f.corto] || `${f.corto}p`;
+    const etiqueta = nombreFormato(f);
     opciones.push({ valor: `${f.corto}x${f.largo}`, texto: `${etiqueta} vertical` });
     opciones.push({ valor: `${f.largo}x${f.corto}`, texto: `${etiqueta} horizontal` });
   }
@@ -445,6 +528,7 @@ let ultimoEstadoMovil = null;
 
 function pintarEstadoMovil(msg) {
   ultimoEstadoMovil = msg;
+  acuseRecibido();
   const lentes = msg.lentes || [];
   // El iPhone publica su estado cada 2 s. Rehacer la lista cada vez cerraria el
   // desplegable en las narices del usuario, asi que solo se toca si cambio.
@@ -688,8 +772,23 @@ function dibujarRejilla(recto) {
 // Medidor
 // ---------------------------------------------------------------------------
 
+// Por cable no hay conexion WebRTC de la que sacar cifras (el panel se quedaba
+// vacio): las cuenta puente.js al recibir y pintar cada fotograma.
+function pintarMedidorNativo(m) {
+  const kbps = (m.bytesPorSegundo * 8) / 1000;
+  const tasa = kbps > 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${Math.round(kbps)} kbps`;
+  const via = estadoNativo && estadoNativo.origen === 'wifi' ? 'WiFi' : 'cable';
+  elMedidor.innerHTML =
+    `<b>${m.ancho}x${m.alto}</b> · ${Math.round(m.fps)} fps\n` +
+    `${tasa} · H.264 por ${via}\n` +
+    `hueco max ${Math.round(m.huecoMaxMs)} ms · decodifica ${m.porHardware ? 'GPU' : 'CPU'}\n` +
+    `motor ${procesador.disponible ? 'GPU' : 'sin GPU'}`;
+}
+
 async function actualizarMedidor() {
-  if (!pc || elMedidor.classList.contains('oculto')) return;
+  if (elMedidor.classList.contains('oculto')) return;
+  if (window.nexoNativoActivo && window.nexoMedidor) return pintarMedidorNativo(window.nexoMedidor());
+  if (!pc) return;
 
   const informe = await pc.getStats();
   let entrada = null;
@@ -984,6 +1083,12 @@ elGrabar.addEventListener('click', () => {
 // pie, hasta ahora la unica salida era cerrar Nexo Desktop entero. Esto corta
 // las sesiones y deja que el sondeo las reabra, sin perder la ventana ni una
 // grabacion en curso.
+const elVentanaTikTok = $('ventanaTikTok');
+if (elVentanaTikTok && window.nexo && typeof window.nexo.abrirVentanaTikTok === 'function') {
+  elVentanaTikTok.hidden = false;
+  elVentanaTikTok.addEventListener('click', () => window.nexo.abrirVentanaTikTok());
+}
+
 const elReconectar = $('reconectar');
 if (elReconectar) {
   // Solo tiene sentido dentro de Nexo Desktop: en un navegador plano no hay

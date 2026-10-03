@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('nexo', {
   elegirPrincipal: (id) => ipcRenderer.invoke('nexo:principal', id),
   // Desbloquea la conexion sin cerrar la aplicacion.
   reiniciar: () => ipcRenderer.invoke('nexo:reiniciar'),
+  // Abre (o trae delante) la ventana con la camara que captura TikTok LIVE Studio.
+  abrirVentanaTikTok: () => ipcRenderer.invoke('nexo:ventana-tiktok'),
 
   // Grabacion. Vive en el proceso principal: escribe a disco sin recodificar y
   // sigue aunque la ventana este minimizada.
