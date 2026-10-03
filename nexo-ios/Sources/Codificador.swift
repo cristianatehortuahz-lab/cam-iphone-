@@ -20,10 +20,25 @@ final class Codificador {
     private var fps: Int32 = 30
     private var bitrate: Int = 12_000_000
 
+    // `codificar` corre en la cola de captura y `detener` llega desde otro hilo
+    // al cambiar de calidad o de lente. Sin candado, los dos podian invalidar o
+    // usar la misma VTCompressionSession a la vez.
+    private let candado = NSLock()
+    // Un codificador detenido no vuelve a crear sesion: el fotograma que ya
+    // venia de camino cuando se sustituyo se descarta.
+    private var parado = false
+
     // Medidas con las que se creo la sesion, que son las del buffer real de la
     // camara. Se publican al PC para poder comprobar que VideoToolbox no escalo:
     // si coinciden con el formato del sensor, no hubo deformacion posible.
-    var medidasActuales: (Int, Int)? { ancho > 0 && alto > 0 ? (Int(ancho), Int(alto)) : nil }
+    //
+    // Llevan su propio candado, no el de la sesion: las lee el hilo principal
+    // al publicar el estado y no debe esperar nunca a VideoToolbox.
+    private let candadoMedidas = NSLock()
+    private var _medidas: (Int, Int)?
+    var medidasActuales: (Int, Int)? {
+        candadoMedidas.lock(); defer { candadoMedidas.unlock() }; return _medidas
+    }
 
     // Entrega (datos Annex-B, marca de tiempo en microsegundos, esClave).
     var alFotograma: ((Data, UInt64, Bool) -> Void)?
@@ -43,15 +58,19 @@ final class Codificador {
 
     // La sesion no se crea aqui: hace falta ver un fotograma real primero.
     func iniciar(fps: Int32, bitrate: Int) {
+        candado.lock(); defer { candado.unlock() }
         self.fps = fps
         self.bitrate = bitrate
-        detener()
+        parado = false
+        cerrarSesion()
     }
 
+    // Con el candado tomado.
     private func crearSesion(ancho: Int32, alto: Int32) {
-        detener()
+        cerrarSesion()
         self.ancho = ancho
         self.alto = alto
+        candadoMedidas.lock(); _medidas = (Int(ancho), Int(alto)); candadoMedidas.unlock()
 
         var sesionCreada: VTCompressionSession?
         let estado = VTCompressionSessionCreate(
@@ -97,6 +116,8 @@ final class Codificador {
         // formato, que pueden traer un tamano distinto sin previo aviso.
         let w = Int32(CVPixelBufferGetWidth(pixelBuffer))
         let h = Int32(CVPixelBufferGetHeight(pixelBuffer))
+        candado.lock(); defer { candado.unlock() }
+        guard !parado else { return }
         if sesion == nil || w != ancho || h != alto {
             NSLog("Nexo: codificador a %dx%d (lo que entrega la camara)", w, h)
             crearSesion(ancho: w, alto: h)
@@ -188,7 +209,16 @@ final class Codificador {
         return salida
     }
 
+    // Puede tardar: espera a que VideoToolbox entregue lo pendiente. No llamar
+    // desde el hilo principal (ver aplicarCamara en ModeloEstado).
     func detener() {
+        candado.lock(); defer { candado.unlock() }
+        parado = true
+        cerrarSesion()
+    }
+
+    // Con el candado tomado.
+    private func cerrarSesion() {
         if let s = sesion {
             VTCompressionSessionCompleteFrames(s, untilPresentationTimeStamp: .invalid)
             VTCompressionSessionInvalidate(s)

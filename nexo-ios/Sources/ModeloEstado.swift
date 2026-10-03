@@ -62,6 +62,8 @@ final class ModeloEstado: ObservableObject {
     // principal: es lo que leen los callbacks de captura y codificacion.
     private let cofreCodificador = Cofre<Codificador>()
     private let cofreSesion = Cofre<SesionNexo>()
+    // Donde se paran los codificadores sustituidos (ver aplicarCamara).
+    private let colaParada = DispatchQueue(label: "nexo.codificador.parada")
     private let codificadorAudio = CodificadorAudio()
     private let servidorCable: ServidorCable
     private let buscador = BuscadorPC()
@@ -129,11 +131,8 @@ final class ModeloEstado: ObservableObject {
         let (ancho, alto) = dimensiones()
         camara.configurar(lenteID: lenteActualID, ancho: ancho, alto: alto, fps: fps)
 
-        // Parar el anterior ANTES de sustituirlo. Sin esto, cada cambio de lente
-        // o de resolucion dejaba viva una VTCompressionSession: son sesiones del
-        // codificador por hardware, y al acumularse unas cuantas el video se
-        // ahoga hasta casi detenerse.
-        codificador?.detener()
+        // El anterior se para mas abajo, ya sustituido y fuera de este hilo.
+        let anterior = codificador
 
         // (Re)crear el codificador. No se le dan medidas: las toma del primer
         // fotograma real de la camara, que es la unica fuente fiable.
@@ -149,6 +148,21 @@ final class ModeloEstado: ObservableObject {
         cod.iniciar(fps: Int32(fps), bitrate: bitrate())
         codificador = cod
         cofreCodificador.poner(cod)
+
+        // Parar el anterior. Sin esto, cada cambio de lente o de resolucion
+        // dejaba viva una VTCompressionSession: son sesiones del codificador por
+        // hardware, y al acumularse unas cuantas el video se ahoga hasta casi
+        // detenerse.
+        //
+        // Se para en su propia cola, no aqui: detener espera a VideoToolbox, y
+        // este es el hilo principal, el mismo que atiende las ordenes del PC y
+        // pinta la app. Nada de lo que haga puede quedarse esperando. El
+        // 01/10/2026, tras un cambio de calidad, el video siguio saliendo pero
+        // el movil no volvio a obedecer ni a publicar su estado hasta cerrar la
+        // app: este hilo bloqueado. Desde el PC no se pudo ver en que llamada.
+        if let anterior {
+            colaParada.async { anterior.detener() }
+        }
     }
 
     private func dimensiones() -> (Int, Int) {
@@ -185,9 +199,13 @@ final class ModeloEstado: ObservableObject {
         ses.alControl = { [weak self] orden in
             Task { @MainActor in self?.atenderControl(orden) }
         }
-        ses.alFin = { [weak self] in
+        ses.alFin = { [weak self, weak ses] in
             Task { @MainActor in
-                guard let self = self else { return }
+                // Solo si la que termina es la sesion en uso. Al llegar una
+                // nueva se cierra la anterior, y su aviso de fin llega despues:
+                // sin esta comprobacion se llevaria por delante la recien
+                // adoptada y el video dejaria de salir.
+                guard let self = self, let ses = ses, self.sesion === ses else { return }
                 self.conectado = false
                 self.transmitiendo = false
                 self.mensaje = "Conexion cerrada"
@@ -261,7 +279,8 @@ final class ModeloEstado: ObservableObject {
     // --- Estado hacia el PC -------------------------------------------------
 
     private func publicarEstado() {
-        let estado: [String: Any] = [
+        guard let ses = sesion else { return }
+        var estado: [String: Any] = [
             "transmitiendo": transmitiendo,
             "lenteActual": lenteActualID ?? "",
             "zoom": Double(zoom),
@@ -270,36 +289,22 @@ final class ModeloEstado: ObservableObject {
             "fps": fps,
             "bateria": Int(UIDevice.current.batteryLevel * 100),
             "lentes": lentes.map { ["id": $0.id, "nombre": $0.nombre] },
-            // Lo que esta lente puede dar de verdad. El estudio llena su
-            // desplegable con esto: ofrecer una lista fija hacia que se pudieran
-            // elegir formatos imposibles, y el movil entregaba otra cosa.
-            "formatos": camara.formatosDisponibles().map {
-                ["largo": $0.largo, "corto": $0.corto, "fpsMax": $0.fpsMax]
-            },
-            // Rangos de zoom, exposicion, enfoque y linterna. El estudio los
-            // necesita para mostrar esos controles: sin ellos los escondia.
-            "capacidades": camara.capacidades(),
-            "audio": camara.hayAudio,
-            "giro": camara.giroAplicado,
-            // El que deja el horizonte recto segun como se sostiene el movil. Si
-            // coincide con el aplicado, la imagen sale derecha; si difiere en 90,
-            // el movil se sostiene al contrario de lo pedido (en vertical con
-            // horizontal elegido). Una diferencia de 180 era el fallo de antes:
-            // imagen boca abajo.
-            "giroHorizonte": camara.giroHorizonte,
-            "captura": camara.diagnostico(),
         ]
-        // La resolucion de arriba es la PEDIDA. Estas dos son la realidad, y sin
-        // ellas un desajuste era invisible desde el PC: el estudio mostraba
-        // "1440p horizontal" mientras recibia 1944x2592 vertical.
-        var completo = estado
+        // La resolucion de arriba es la PEDIDA. Esta y formatoSensor (que pone
+        // la camara) son la realidad, y sin ellas un desajuste era invisible
+        // desde el PC: el estudio mostraba "1440p horizontal" mientras recibia
+        // 1944x2592 vertical.
         if let (w, h) = codificador?.medidasActuales {
-            completo["resolucionReal"] = "\(w)x\(h)"
+            estado["resolucionReal"] = "\(w)x\(h)"
         }
-        if let (w, h) = camara.medidasFormatoActivo() {
-            completo["formatoSensor"] = "\(w)x\(h)"
+        // Lo de la camara (formatos, rangos, giro, diagnostico) lo lee ella en
+        // su cola, detras de la configuracion que este pendiente. Leido aqui,
+        // el hilo principal preguntaba a la sesion de captura mientras se
+        // estaba rehaciendo en otro hilo.
+        let base = estado
+        camara.leerParaEstado { deCamara in
+            ses.enviarEstado(base.merging(deCamara) { _, nuevo in nuevo })
         }
-        sesion?.enviarEstado(completo)
     }
 
     // --- Cambios desde la propia interfaz del iPhone ------------------------

@@ -322,6 +322,42 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         return min(d, 360 - d)
     }
 
+    // La parte del estado que sale de la camara, leida en colaSesion: va en
+    // orden con las configuraciones, asi que refleja la ultima ya aplicada, y
+    // nadie mas toca la sesion de captura mientras tanto. `entrega` se llama en
+    // esa misma cola.
+    func leerParaEstado(_ entrega: @escaping ([String: Any]) -> Void) {
+        colaSesion.async { [weak self] in
+            guard let self else { return }
+            var d: [String: Any] = [
+                // Lo que esta lente puede dar de verdad. El estudio llena su
+                // desplegable con esto: ofrecer una lista fija hacia que se
+                // pudieran elegir formatos imposibles, y el movil entregaba
+                // otra cosa.
+                "formatos": self.formatosDisponibles().map {
+                    ["largo": $0.largo, "corto": $0.corto, "fpsMax": $0.fpsMax]
+                },
+                // Rangos de zoom, exposicion, enfoque y linterna. El estudio
+                // los necesita para mostrar esos controles: sin ellos los
+                // escondia.
+                "capacidades": self.capacidades(),
+                "audio": self.hayAudio,
+                "giro": self.giroAplicado,
+                // El que deja el horizonte recto segun como se sostiene el
+                // movil. Si coincide con el aplicado, la imagen sale derecha;
+                // si difiere en 90, el movil se sostiene al contrario de lo
+                // pedido (en vertical con horizontal elegido). Una diferencia
+                // de 180 era el fallo de antes: imagen boca abajo.
+                "giroHorizonte": self.giroHorizonte,
+                "captura": self.diagnostico(),
+            ]
+            if let (w, h) = self.medidasFormatoActivo() {
+                d["formatoSensor"] = "\(w)x\(h)"
+            }
+            entrega(d)
+        }
+    }
+
     // Para poder ver desde el PC si la captura esta viva. Sin esto, "no llegan
     // fotogramas" podia ser media docena de cosas distintas.
     func diagnostico() -> [String: Any] {
@@ -416,74 +452,94 @@ final class CamaraEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
 
     // --- Controles manuales -------------------------------------------------
 
+    // Los controles tocan el dispositivo en colaSesion, igual que la
+    // configuracion y por lo mismo: lockForConfiguration espera si otro hilo lo
+    // tiene, y quien los llama es el hilo principal.
+    private func conDispositivo(_ accion: @escaping (AVCaptureDevice) -> Void) {
+        colaSesion.async { [weak self] in
+            guard let d = self?.dispositivoActual else { return }
+            accion(d)
+        }
+    }
+
     func aplicarZoom(_ factor: CGFloat) {
-        guard let d = dispositivoActual else { return }
-        try? d.lockForConfiguration()
-        d.videoZoomFactor = max(1, min(factor, d.activeFormat.videoMaxZoomFactor))
-        d.unlockForConfiguration()
+        conDispositivo { d in
+            try? d.lockForConfiguration()
+            d.videoZoomFactor = max(1, min(factor, d.activeFormat.videoMaxZoomFactor))
+            d.unlockForConfiguration()
+        }
     }
 
     func aplicarExposicion(_ ev: Float) {
-        guard let d = dispositivoActual, d.isExposureModeSupported(.continuousAutoExposure) else { return }
-        try? d.lockForConfiguration()
-        let objetivo = max(d.minExposureTargetBias, min(ev, d.maxExposureTargetBias))
-        d.setExposureTargetBias(objetivo)
-        d.unlockForConfiguration()
+        conDispositivo { d in
+            guard d.isExposureModeSupported(.continuousAutoExposure) else { return }
+            try? d.lockForConfiguration()
+            let objetivo = max(d.minExposureTargetBias, min(ev, d.maxExposureTargetBias))
+            d.setExposureTargetBias(objetivo)
+            d.unlockForConfiguration()
+        }
     }
 
     func aplicarISOyObturador(iso: Float?, obturadorSeg: Float?) {
-        guard let d = dispositivoActual, d.isExposureModeSupported(.custom) else { return }
-        try? d.lockForConfiguration()
-        let dur = obturadorSeg.map { CMTime(seconds: Double($0), preferredTimescale: 1_000_000) }
-            ?? AVCaptureDevice.currentExposureDuration
-        let isoObjetivo = iso.map { max(d.activeFormat.minISO, min($0, d.activeFormat.maxISO)) }
-            ?? AVCaptureDevice.currentISO
-        d.setExposureModeCustom(duration: dur, iso: isoObjetivo)
-        d.unlockForConfiguration()
+        conDispositivo { d in
+            guard d.isExposureModeSupported(.custom) else { return }
+            try? d.lockForConfiguration()
+            let dur = obturadorSeg.map { CMTime(seconds: Double($0), preferredTimescale: 1_000_000) }
+                ?? AVCaptureDevice.currentExposureDuration
+            let isoObjetivo = iso.map { max(d.activeFormat.minISO, min($0, d.activeFormat.maxISO)) }
+                ?? AVCaptureDevice.currentISO
+            d.setExposureModeCustom(duration: dur, iso: isoObjetivo)
+            d.unlockForConfiguration()
+        }
     }
 
     func aplicarFoco(_ pos: Float?) {
-        guard let d = dispositivoActual else { return }
-        try? d.lockForConfiguration()
-        if let p = pos, d.isFocusModeSupported(.locked) {
-            d.setFocusModeLocked(lensPosition: max(0, min(p, 1)), completionHandler: nil)
-        } else if d.isFocusModeSupported(.continuousAutoFocus) {
-            d.focusMode = .continuousAutoFocus
+        conDispositivo { d in
+            try? d.lockForConfiguration()
+            if let p = pos, d.isFocusModeSupported(.locked) {
+                d.setFocusModeLocked(lensPosition: max(0, min(p, 1)), completionHandler: nil)
+            } else if d.isFocusModeSupported(.continuousAutoFocus) {
+                d.focusMode = .continuousAutoFocus
+            }
+            d.unlockForConfiguration()
         }
-        d.unlockForConfiguration()
     }
 
     func aplicarLinterna(_ encendida: Bool) {
-        guard let d = dispositivoActual, d.hasTorch else { return }
-        try? d.lockForConfiguration()
-        try? d.setTorchModeOn(level: encendida ? 1.0 : 0.0)
-        if !encendida { d.torchMode = .off }
-        d.unlockForConfiguration()
+        conDispositivo { d in
+            guard d.hasTorch else { return }
+            try? d.lockForConfiguration()
+            try? d.setTorchModeOn(level: encendida ? 1.0 : 0.0)
+            if !encendida { d.torchMode = .off }
+            d.unlockForConfiguration()
+        }
     }
 
     // Modos de enfoque y balance de blancos, que el estudio ofrece como listas.
     // Antes mandaba 'enfoque' y 'balance' y el movil no los entendia: eran dos
     // desplegables que no hacian absolutamente nada.
     func aplicarModoEnfoque(_ modo: String) {
-        guard let d = dispositivoActual else { return }
-        try? d.lockForConfiguration()
-        if modo == "bloqueado", d.isFocusModeSupported(.locked) {
-            d.focusMode = .locked
-        } else if d.isFocusModeSupported(.continuousAutoFocus) {
-            d.focusMode = .continuousAutoFocus
+        conDispositivo { d in
+            try? d.lockForConfiguration()
+            if modo == "bloqueado", d.isFocusModeSupported(.locked) {
+                d.focusMode = .locked
+            } else if d.isFocusModeSupported(.continuousAutoFocus) {
+                d.focusMode = .continuousAutoFocus
+            }
+            d.unlockForConfiguration()
         }
-        d.unlockForConfiguration()
     }
 
     func aplicarModoBalance(_ modo: String) {
-        guard let d = dispositivoActual else { return }
-        try? d.lockForConfiguration()
-        if modo == "bloqueado", d.isWhiteBalanceModeSupported(.locked) {
-            d.whiteBalanceMode = .locked
-        } else if d.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
-            d.whiteBalanceMode = .continuousAutoWhiteBalance
+        conDispositivo { d in
+            try? d.lockForConfiguration()
+            if modo == "bloqueado", d.isWhiteBalanceModeSupported(.locked) {
+                d.whiteBalanceMode = .locked
+            } else if d.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                d.whiteBalanceMode = .continuousAutoWhiteBalance
+            }
+            d.unlockForConfiguration()
         }
-        d.unlockForConfiguration()
     }
 
     // Rangos reales de la lente activa, con la forma que el estudio ya sabe
