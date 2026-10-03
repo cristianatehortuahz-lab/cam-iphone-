@@ -41,6 +41,8 @@ function Anotar([string]$estado, [string]$que, [string]$detalle = '') {
   if ($estado -ne 'OK') { $pendiente.Add("$que$(if ($detalle) { ": $detalle" })") }
 }
 function Paso([string]$t) { Write-Host ''; Write-Host "== $t" -ForegroundColor Cyan }
+# Con -SoloComprobar no se copia nada: los "OK" del kit dicen lo que se copiaria.
+$copia = if ($SoloComprobar) { ' (se copiaria; ahora solo compruebo)' } else { '' }
 function Preguntar([string]$t) { if ($SoloComprobar) { return $false }; (Read-Host "  $t (S/N)") -match '^[sS]' }
 # Copia sin perder lo que hubiera: lo existente pasa a <nombre>.antes-nexo.
 function Copiar-Seguro([string]$origen, [string]$destino) {
@@ -203,7 +205,7 @@ if ($carpetaKit) {
     Get-ChildItem (Join-Path $obsKit 'scenes') -Filter '*.json' -ErrorAction SilentlyContinue | ForEach-Object {
       Copiar-Seguro $_.FullName (Join-Path $obs "scenes\$($_.Name)")
     }
-    Anotar 'OK' 'Perfiles y escenas de OBS' 'Nexo Horizontal y Nexo Vertical'
+    Anotar 'OK' 'Perfiles y escenas de OBS' "Nexo Horizontal y Nexo Vertical$copia"
     Anotar 'AVISO' 'OBS: clave de emision de YouTube' 'Ajustes > Emision: pegala de nuevo (no viaja en el kit)'
     Anotar 'AVISO' 'OBS: pantalla que se captura' 'escena Estudio > Pantalla > Propiedades: elige el monitor donde va FL'
 
@@ -231,17 +233,19 @@ if ($carpetaKit) {
   if (Test-Path $flKit) {
     $proyectos = Join-Path $env:USERPROFILE 'Documents\Image-Line\FL Studio\Projects'
     Get-ChildItem $flKit -Directory | ForEach-Object { Copiar-Seguro $_.FullName (Join-Path $proyectos $_.Name) }
-    Anotar 'OK' 'Proyectos de FL' (((Get-ChildItem $flKit -Directory).Name) -join ', ')
+    Anotar 'OK' 'Proyectos de FL' ((((Get-ChildItem $flKit -Directory).Name) -join ', ') + $copia)
   }
   $rpp = Join-Path $carpetaKit 'reaper\Directo - cantar.RPP'
   if (Test-Path $rpp) {
     Copiar-Seguro $rpp (Join-Path $env:APPDATA 'REAPER\ProjectTemplates\Directo - cantar.RPP')
-    Anotar 'OK' 'Plantilla de Reaper "Directo - cantar"'
+    Anotar 'OK' 'Plantilla de Reaper "Directo - cantar"' $copia.Trim()
     Anotar 'AVISO' 'Reaper: driver de la interfaz' "Options > Preferences > Audio > Device: ASIO, $(if ($driverAsio) { $driverAsio } else { 'el de la interfaz' }), 44100 Hz"
   }
   $ipa = Get-ChildItem (Join-Path $carpetaKit 'iphone') -Filter '*.ipa' -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($ipa) {
     Copiar-Seguro $ipa.FullName (Join-Path $Raiz "dist\$($ipa.Name)")
+    # La del kit es la ultima probada. En GitHub (pestana Actions) puede haber
+    # una mas nueva con arreglos aun sin probar en el iPhone.
     Anotar 'AVISO' 'App del iPhone: firmarla desde este PC' "Sideloadly con tu Apple ID y dist\$($ipa.Name); luego doble clic en instalar-guardian.bat"
   }
 
@@ -255,7 +259,7 @@ if ($carpetaKit) {
       New-Item -ItemType Directory -Force $memoria | Out-Null
       Get-ChildItem $notasKit -Filter '*.md' | ForEach-Object { Copiar-Seguro $_.FullName (Join-Path $memoria $_.Name) }
     }
-    Anotar 'OK' 'Notas de Claude sobre el montaje' $memoria
+    Anotar 'OK' 'Notas de Claude sobre el montaje' "$memoria$copia"
   }
 }
 
