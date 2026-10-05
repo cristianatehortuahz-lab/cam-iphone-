@@ -21,7 +21,14 @@ a la carpeta de memoria de Claude de este proyecto; esta guia es solo el mapa.
   - Transporte usbmux en `127.0.0.1:27015` hacia el puerto 7000 del iPhone.
   - Puente de audio ReaStream: `puente-audio.js`.
   - Salida del audio a VB-Cable para TikTok: `salida-audio.js`.
-  - Ventana para TikTok: `herramientas/ventana-camara/`.
+  - La camara como webcam de Windows: `camara-virtual.js` y su ayudante
+    `src/nativo/camvirtual.cs` (Nexo lo compila solo con el `csc.exe` de Windows).
+    Alimenta la "OBS Virtual Camera" sin que OBS este abierto; en las listas sale
+    con ese nombre. Solo por cable. Giro, espejo y encuadre en el menu de la bandeja.
+  - Micro del iPhone al directo: `micro-iphone.js` lo decodifica y el puente lo
+    mezcla en el audio que ya va a OBS y a TikTok. Interruptor en la bandeja y en
+    el estudio; apagado por defecto.
+  - Ventana para TikTok (reserva, la via antigua): `herramientas/ventana-camara/`.
 - `legado/`: servidor embebido. Sirve el estudio (puerto 8080) y la fuente de
   OBS (`/obs`). `/api/nexo` da el estado de Nexo, solo desde el propio PC.
 - `herramientas/`: scripts de montaje, comprobacion y pruebas. El de cada dia es
@@ -39,7 +46,8 @@ a la carpeta de memoria de Claude de este proyecto; esta guia es solo el mapa.
    - la camara, con la fuente de navegador `localhost:8080/obs`;
    - el audio, con la fuente "FL Studio (ReaStream)".
 4. TikTok LIVE Studio va a TikTok:
-   - la camara, capturando la ventana "Nexo - Camara 1:1";
+   - la camara, con una fuente "Camara" > "OBS Virtual Camera" (la alimenta Nexo).
+     Las secuencias antiguas capturan la ventana "Nexo - Camara 1:1";
    - el audio, con el micro "CABLE Output" (VB-Cable), que alimenta Nexo.
 
 ## Trampas conocidas (no repetirlas)
@@ -58,6 +66,23 @@ a la carpeta de memoria de Claude de este proyecto; esta guia es solo el mapa.
   - nunca pulses "Iniciar LIVE": lo pulsa el usuario;
   - su fuente "Enlace" no decodifica H.264;
   - su lista de ventanas es caprichosa: que una ventana no salga no prueba nada.
+- Camara virtual:
+  - una aplicacion que ya la tiene abierta conserva el tamano que negocio y
+    deforma la imagen si cambia (formato del iPhone, giro, encuadre): hay que
+    volver a elegir la camara en esa aplicacion;
+  - TikTok la refleja y le aplica su retoque ("Mejorar") por su cuenta: lo que
+    sale de Nexo es exacto (comprobado leyendola con ffmpeg);
+  - si OBS inicia SU camara virtual, las dos se pisan: en este montaje no se usa;
+  - a 4K este PC no da abasto (9 fps): el directo va a 720p;
+  - con ffmpeg, ni `-fflags nobuffer` ni `-analyzeduration 0`: ver el comentario
+    en `camara-virtual.js`.
+- El micro del iPhone recoge tambien la voz sin Auto-Tune y los altavoces: con
+  auriculares, y apagado cuando no haga falta. Sin DAW abierto el puente fabrica
+  los paquetes; esa via no esta probada contra el ReaStream de OBS.
+- `ajustes.json` de Nexo no se edita con PowerShell (`Out-File` mete BOM).
+- Las capturas de pantalla de computer-use ocultan las aplicaciones que no estan
+  permitidas (el navegador del usuario): pide acceso tambien a ellas o no captures
+  mientras las usa.
 - La ventana del estudio de Nexo gasta CPU: en un directo, a la bandeja.
 - La ventana de Nexo usa `titleBarStyle` 'hidden', asi que no hay DevTools. Para
   cargar codigo nuevo del proceso principal hay que reiniciar Nexo. Su registro va

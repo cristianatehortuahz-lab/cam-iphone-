@@ -64,11 +64,101 @@ function hilo() {
   let lote = [];
   let framesLote = 0;
 
+  // --- Micro del iPhone ----------------------------------------------------
+  //
+  // Se suma al audio del DAW dentro de sus propios paquetes, justo antes de
+  // reenviarlos: asi llega a OBS y a TikTok por el camino que ya existe, sin
+  // tocar nada en ninguno de los dos, y el audio del DAW no gana ni un
+  // milisegundo de retraso.
+  //
+  // El micro llega al ritmo del reloj del iPhone y los paquetes al de la
+  // interfaz de audio, que nunca coinciden del todo. Entre los dos hay un
+  // colchon de ~70 ms, y la velocidad de lectura se corrige hasta un 1 % para
+  // mantenerlo (inaudible en una voz). Si se vacia, el micro calla hasta
+  // rellenarse; si se desborda tras un atasco, salta al presente.
+  const ID_MEZCLA = 'nexo-fl';
+  const MIC_FS = 44100;
+  const MIC_CAP = MIC_FS * 2;
+  const MIC_OBJETIVO = Math.round(MIC_FS * 0.07);
+  const micro = new Float32Array(MIC_CAP);
+  let micLee = 0; // con decimales: se lee interpolando
+  let micEscribe = 0;
+  let micLleno = 0;
+  let micActivo = false;
+  let micGanancia = 1;
+  let micEnMarcha = false;
+  let micUltimo = 0; // cuando llego el ultimo trozo del iPhone
+  let dawUltimo = 0; // cuando llego el ultimo paquete del DAW con ID_MEZCLA
+  let relojFabrica = null; // ver fabricar(), mas abajo
+
+  function meterMicro(pcm) {
+    for (let i = 0; i < pcm.length; i++) {
+      micro[micEscribe] = pcm[i];
+      micEscribe = (micEscribe + 1) % MIC_CAP;
+    }
+    micLleno += pcm.length;
+    micUltimo = Date.now();
+    if (micLleno > MIC_OBJETIVO * 4) {
+      micLee = (micEscribe - MIC_OBJETIVO + MIC_CAP) % MIC_CAP;
+      micLleno = MIC_OBJETIVO;
+    }
+  }
+
+  // Suma el micro a un paquete ReaStream, en su sitio.
+  function mezclar(paquete) {
+    if (!micActivo || Date.now() - micUltimo > 500) {
+      micEnMarcha = false;
+      micLleno = 0;
+      micLee = micEscribe;
+      return;
+    }
+    const canales = paquete.readUInt8(40);
+    const fs = paquete.readUInt32LE(41);
+    const bytes = paquete.readUInt16LE(45);
+    const porCanal = bytes / 4 / canales;
+    if (!canales || !fs || !Number.isInteger(porCanal) || CABECERA + bytes > paquete.length) return;
+
+    const desvio = (micLleno - MIC_OBJETIVO) / MIC_OBJETIVO;
+    const paso = (MIC_FS / fs) * (1 + Math.max(-0.01, Math.min(0.01, desvio * 0.02)));
+    if (!micEnMarcha) {
+      if (micLleno < MIC_OBJETIVO) return;
+      micEnMarcha = true;
+    }
+    if (micLleno < porCanal * paso + 2) {
+      micEnMarcha = false;
+      return;
+    }
+    for (let i = 0; i < porCanal; i++) {
+      const a = Math.floor(micLee);
+      const parte = micLee - a;
+      const s = (micro[a] * (1 - parte) + micro[(a + 1) % MIC_CAP] * parte) * micGanancia;
+      micLee += paso;
+      if (micLee >= MIC_CAP) micLee -= MIC_CAP;
+      for (let c = 0; c < canales; c++) {
+        const donde = CABECERA + (c * porCanal + i) * 4;
+        paquete.writeFloatLE(paquete.readFloatLE(donde) + s, donde);
+      }
+    }
+    micLleno -= porCanal * paso;
+  }
+
+  const esDeMezcla = (paquete) =>
+    paquete.length >= CABECERA &&
+    paquete.toString('latin1', 0, 4) === 'MRSR' &&
+    paquete.toString('latin1', 8, 40).replace(/\0+$/, '') === ID_MEZCLA;
+
   parentPort.on('message', (m) => {
     if (m && m.tipo === 'salida') {
       identificadorSalida = m.activa ? m.identificador : null;
       lote = [];
       framesLote = 0;
+    } else if (m && m.tipo === 'micro') {
+      micActivo = Boolean(m.activo);
+      if (typeof m.ganancia === 'number') micGanancia = m.ganancia;
+      clearInterval(relojFabrica);
+      relojFabrica = micActivo ? setInterval(fabricar, 3) : null;
+    } else if (m && m.tipo === 'micro-pcm') {
+      if (micActivo) meterMicro(m.pcm);
     }
   });
 
@@ -114,6 +204,10 @@ function hilo() {
       // Nuestra propia difusion vuelve tambien a este socket: no reenviarla o
       // seria un bucle.
       if (origen.port === puertoSalida && origen.address === LOCAL) return;
+      if (esDeMezcla(paquete)) {
+        dawUltimo = Date.now();
+        mezclar(paquete);
+      }
       salida.send(paquete, puerto, DIFUSION);
       if (identificadorSalida) desmontar(paquete);
       ultimo = Date.now();
@@ -127,7 +221,49 @@ function hilo() {
       entrada.setRecvBufferSize(BUFER);
       parentPort.postMessage({ tipo: 'listo' });
     });
+
   });
+
+  // Sin DAW abierto no hay paquetes en los que mezclar: entonces el puente los
+  // fabrica el mismo, con el micro solo, para que se oiga igual. Mismo formato
+  // que los de FL: 2 canales, 44 100 Hz, 144 muestras por paquete. En cuanto el
+  // DAW vuelve a mandar, se deja de fabricar. El reloj solo corre con el micro
+  // encendido.
+  const BLOQUE = 144;
+  const cabeceraFabrica = Buffer.alloc(CABECERA);
+  cabeceraFabrica.write('MRSR', 0, 'latin1');
+  cabeceraFabrica.writeUInt32LE(CABECERA + BLOQUE * 2 * 4, 4);
+  cabeceraFabrica.write(ID_MEZCLA, 8, 'latin1');
+  cabeceraFabrica.writeUInt8(2, 40);
+  cabeceraFabrica.writeUInt32LE(MIC_FS, 41);
+  cabeceraFabrica.writeUInt16LE(BLOQUE * 2 * 4, 45);
+  let fabricando = false;
+  let inicioFabrica = 0n;
+  let fabricadas = 0;
+
+  function fabricar() {
+    const ahora = Date.now();
+    if (!micActivo || ahora - dawUltimo < 300 || ahora - micUltimo > 500) {
+      fabricando = false;
+      return;
+    }
+    if (!fabricando) {
+      fabricando = true;
+      inicioFabrica = process.hrtime.bigint();
+      fabricadas = 0;
+    }
+    const debidas = Number(((process.hrtime.bigint() - inicioFabrica) * BigInt(MIC_FS)) / 1000000000n);
+    // Tras un atasco no se recupera lo perdido: se oiria todo de golpe.
+    if (debidas - fabricadas > MIC_FS / 5) fabricadas = debidas - BLOQUE;
+    while (debidas - fabricadas >= BLOQUE) {
+      const paquete = Buffer.alloc(CABECERA + BLOQUE * 2 * 4);
+      cabeceraFabrica.copy(paquete);
+      mezclar(paquete);
+      salida.send(paquete, puerto, DIFUSION);
+      if (identificadorSalida) desmontar(paquete);
+      fabricadas += BLOQUE;
+    }
+  }
 
   setInterval(() => {
     if (llegando && Date.now() - ultimo > SILENCIO) {
@@ -172,6 +308,18 @@ class PuenteAudio extends EventEmitter {
   // Llega como eventos 'pcm': { fs, l, r } con Float32Array por canal.
   activarSalida(activa, identificador = 'nexo-fl') {
     if (this.hilo) this.hilo.postMessage({ tipo: 'salida', activa, identificador });
+  }
+
+  // Enciende o apaga la mezcla del micro del iPhone en el audio que se reenvia,
+  // con su volumen (1 = tal cual llega).
+  micro(activo, ganancia = 1) {
+    if (this.hilo) this.hilo.postMessage({ tipo: 'micro', activo, ganancia });
+  }
+
+  // Audio del micro del iPhone ya decodificado: Float32Array mono a 44 100 Hz
+  // (micro-iphone.js). Se entrega al hilo sin copiarlo.
+  microPcm(pcm) {
+    if (this.hilo) this.hilo.postMessage({ tipo: 'micro-pcm', pcm }, [pcm.buffer]);
   }
 
   detener() {

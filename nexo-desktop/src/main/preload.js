@@ -25,6 +25,11 @@ contextBridge.exposeInMainWorld('nexo', {
   reiniciar: () => ipcRenderer.invoke('nexo:reiniciar'),
   // Abre (o trae delante) la ventana con la camara que captura TikTok LIVE Studio.
   abrirVentanaTikTok: () => ipcRenderer.invoke('nexo:ventana-tiktok'),
+  // Camara virtual y micro del iPhone hacia el directo: estado y avisos de cambio.
+  estadoDirecto: () => ipcRenderer.invoke('nexo:directo'),
+  onDirecto: (cb) => ipcRenderer.on('nexo:directo', (_ev, d) => cb(d)),
+  // cambios: { activo } y/o { nivel } (en %). Devuelve el estado nuevo.
+  microIphone: (cambios) => ipcRenderer.invoke('nexo:micro-iphone', cambios),
 
   // Grabacion. Vive en el proceso principal: escribe a disco sin recodificar y
   // sigue aunque la ventana este minimizada.

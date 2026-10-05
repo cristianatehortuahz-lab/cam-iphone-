@@ -448,6 +448,19 @@ if ($nexo -and $nexo.audioFL.llega) {
 if ($nexo -and $nexo.salidaTikTok.activa) { Anotar 'OK' 'Audio para TikTok por VB-Cable' $nexo.salidaTikTok.dispositivo }
 elseif ($nexo) { Anotar 'AVISO' 'Sin salida de audio para TikTok' 'falta VB-Cable (CABLE Input)' }
 
+# --- La camara como webcam (fuente "Camara" de TikTok) y el micro del iPhone ---
+$cam = if ($nexo) { $nexo.camaraVirtual } else { $null }
+if ($cam -and $cam.activa) {
+  if ($cam.enMarcha) { Anotar 'OK' 'Camara de Nexo como webcam' "$($cam.tamano): en TikTok, fuente Camara > OBS Virtual Camera" }
+  elseif ($cam.motivo) { Anotar 'AVISO' 'La camara de Nexo no sale como webcam' $cam.motivo }
+  else { Anotar 'AVISO' 'La camara de Nexo espera al iPhone por cable' }
+}
+# Encendido por descuido mete en el directo la voz sin Auto-Tune y lo que suene
+# por los altavoces: que se vea antes de emitir.
+if ($nexo -and $nexo.microIphone -and $nexo.microIphone.activo) {
+  Anotar 'AVISO' 'El micro del iPhone esta ENCENDIDO en el directo' 'se apaga en el icono de Nexo (bandeja) > Micro del iPhone al directo'
+}
+
 # Firma de la app del iPhone
 $firma = node (Join-Path $Raiz 'herramientas\caducidad-firma.js') | ConvertFrom-Json
 if ($firma.error) { Anotar 'AVISO' 'No pude leer la firma del iPhone' $firma.error }

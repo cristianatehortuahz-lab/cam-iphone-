@@ -265,4 +265,4 @@ class Grabador {
   }
 }
 
-module.exports = { Grabador, marcaTiempo };
+module.exports = { Grabador, marcaTiempo, buscarFfmpeg };

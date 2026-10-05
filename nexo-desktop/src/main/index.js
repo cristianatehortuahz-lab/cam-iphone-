@@ -8,6 +8,8 @@ const protocolo = require('./protocolo');
 const { Grabador } = require('./grabador');
 const { PuenteAudio } = require('./puente-audio');
 const { SalidaAudio } = require('./salida-audio');
+const { CamaraVirtual } = require('./camara-virtual');
+const { MicroIphone } = require('./micro-iphone');
 const { rutaLegado } = require('./clave');
 
 // El servidor legado (auditado) corre embebido dentro de la app: sirve el
@@ -32,6 +34,8 @@ let ajustes = null;
 let puenteAudio = null; // FL Studio -> OBS por ReaStream (ver puente-audio.js)
 let salidaAudio = null; // FL Studio -> VB-Cable -> TikTok LIVE Studio (ver salida-audio.js)
 let salidaAudioEstado = { encontrado: false, etiqueta: null };
+let camaraVirtual = null; // el video del iPhone como webcam de Windows (ver camara-virtual.js)
+let microIphone = null; // el micro del iPhone hacia el directo (ver micro-iphone.js)
 const grabador = new Grabador();
 let saliendoDeVerdad = false;
 
@@ -53,8 +57,10 @@ async function arrancar() {
   ajustes = new Ajustes(app.getPath('userData'));
 
   await iniciarServidor();
+  iniciarCamaraVirtual();
   await iniciarConexionNativa();
   await iniciarPuenteAudio();
+  iniciarMicroIphone();
   crearVentana();
   crearBandeja();
   aplicarArranqueConWindows();
@@ -97,6 +103,8 @@ function estadoNexo() {
       fps: movil.fps || null,
     },
     audioFL: { puente: Boolean(puenteAudio), llega: audioFLLlega },
+    camaraVirtual: camaraVirtual ? camaraVirtual.estado() : null,
+    microIphone: microIphone ? microIphone.estado() : null,
     salidaTikTok: { activa: salidaAudioEstado.encontrado, dispositivo: salidaAudioEstado.etiqueta },
     grabando: grabador.grabando,
   };
@@ -149,6 +157,83 @@ function iniciarSalidaAudio() {
   salidaAudio.iniciar();
 }
 
+// --- Camara virtual y micro del iPhone ---------------------------------------
+
+// Los dos salen solo de un iPhone conectado por cable. Por WiFi llega todo con
+// mas retraso, y el usuario lo quiere siempre por cable (05/10/2026).
+function porCable(id) {
+  const camara = conexion && conexion.sesiones.get(id);
+  return Boolean(camara && camara.origen === 'cable');
+}
+
+function iniciarCamaraVirtual() {
+  const conf = ajustes.get('camaraVirtual');
+  camaraVirtual = new CamaraVirtual({
+    carpetaDatos: app.getPath('userData'),
+    opciones: { giro: conf.giro, espejo: conf.espejo, encuadre: conf.encuadre },
+  });
+  camaraVirtual.on('estado', () => {
+    if (bandeja) refrescarMenuBandeja();
+    avisarDirecto();
+  });
+  camaraVirtual.activar(conf.activa);
+}
+
+// Cambia opciones de la camara desde la bandeja y las guarda.
+function ajustarCamaraVirtual(cambios) {
+  const conf = { ...ajustes.get('camaraVirtual'), ...cambios };
+  ajustes.set('camaraVirtual', conf);
+  camaraVirtual.configurar({ giro: conf.giro, espejo: conf.espejo, encuadre: conf.encuadre });
+  camaraVirtual.activar(conf.activa);
+  if (bandeja) refrescarMenuBandeja();
+  avisarDirecto();
+}
+
+function iniciarMicroIphone() {
+  const conf = ajustes.get('microIphone');
+  microIphone = new MicroIphone();
+  microIphone.on('pcm', (pcm) => { if (puenteAudio) puenteAudio.microPcm(pcm); });
+  // Que quede en el registro si llega y a que nivel: "no se oye" puede ser el
+  // interruptor, el iPhone callado o el volumen.
+  setInterval(() => {
+    if (!microIphone.activo) return;
+    const pico = microIphone.leerPico();
+    const nivel = pico > 0 ? `pico ${Math.round(20 * Math.log10(pico))} dB` : 'silencio';
+    console.log(`[micro] iPhone al directo: ${microIphone.estado().llega ? nivel : 'no llega audio del iPhone'}`);
+  }, 10000).unref();
+  aplicarMicroIphone(conf);
+}
+
+function aplicarMicroIphone(conf) {
+  microIphone.activar(conf.activo);
+  if (puenteAudio) puenteAudio.micro(conf.activo, (conf.nivel || 100) / 100);
+}
+
+function ajustarMicroIphone(cambios) {
+  const conf = { ...ajustes.get('microIphone'), ...cambios };
+  ajustes.set('microIphone', conf);
+  aplicarMicroIphone(conf);
+  console.log(`[micro] micro del iPhone ${conf.activo ? 'encendido al ' + conf.nivel + ' %' : 'apagado'}`);
+  if (bandeja) refrescarMenuBandeja();
+  avisarDirecto();
+  return estadoDirecto();
+}
+
+// Lo que el estudio necesita para pintar sus botones.
+function estadoDirecto() {
+  return {
+    camaraVirtual: camaraVirtual ? camaraVirtual.estado() : null,
+    microIphone: { ...ajustes.get('microIphone'), ...(microIphone ? microIphone.estado() : {}) },
+  };
+}
+
+function avisarDirecto() {
+  if (ventana && !ventana.isDestroyed()) ventana.webContents.send('nexo:directo', estadoDirecto());
+}
+
+ipcMain.handle('nexo:directo', () => estadoDirecto());
+ipcMain.handle('nexo:micro-iphone', (_ev, cambios) => ajustarMicroIphone(cambios || {}));
+
 // --- Conexion nativa con Nexo Cam ------------------------------------------
 
 async function iniciarConexionNativa() {
@@ -157,6 +242,8 @@ async function iniciarConexionNativa() {
     // Se reenvia al renderer, que lo mete en el decodificador WebCodecs.
     ipcAudio: (a, id) => {
       if (id !== conexion.principal) return; // solo se oye la camara principal
+      // Al directo, si el interruptor esta encendido. No depende de la ventana.
+      if (microIphone && microIphone.activo && porCable(id)) microIphone.escribir(a);
       // Como el video: solo con el estudio a la vista. Oculto, decodificar el
       // audio del iPhone no sirve a nadie (la grabacion va por el proceso
       // principal) y su renderer seguia gastando ~14 % de CPU en la bandeja
@@ -178,6 +265,11 @@ async function iniciarConexionNativa() {
       // como delta. Lo confirmamos con el bitstream una sola vez aqui, y ese
       // valor ya sirve para todo lo de abajo y viaja en la carga hacia OBS.
       const clave = v.clave || protocolo.esFotogramaClave(v.datos);
+
+      // A la camara virtual, tal cual llega: es la imagen directa del iPhone.
+      if (camaraVirtual && camaraVirtual.activa && porCable(id)) {
+        camaraVirtual.escribir({ datos: v.datos, clave }, conexion.sesiones.get(id).estadoMovil?.fps);
+      }
 
       // Al estudio solo si la ventana esta a la vista. Con la fuente de OBS
       // abierta, el mismo 4K se decodificaba dos veces en paralelo (aqui y en
@@ -215,6 +307,11 @@ async function iniciarConexionNativa() {
     // por cable se cierra, hay que decirselo para que reinicie su decodificador.
     if (c.evento === 'sesion-cerrada' && servidor && servidor.avisarVisores) {
       servidor.avisarVisores({ tipo: 'nexo-sin-sesion' });
+    }
+    // La camara y el micro empiezan de cero con la sesion (o la camara) nueva.
+    if (c.evento === 'sesion-cerrada' || c.evento === 'principal-cambiada') {
+      if (camaraVirtual) camaraVirtual.cortar();
+      if (microIphone) microIphone.cortar();
     }
 
     // Refrescar el menu de bandeja si cambia el estado importante.
@@ -389,6 +486,7 @@ function refrescarMenuBandeja() {
     { type: 'separator' },
     { label: 'Abrir el estudio', click: mostrarVentana },
     { label: 'Abrir ventana de camara para TikTok', enabled: Boolean(servidor), click: abrirVentanaTikTok },
+    ...menuDirecto(),
     {
       label: 'Copiar direccion del iPhone',
       enabled: Boolean(servidor),
@@ -416,6 +514,81 @@ function refrescarMenuBandeja() {
     { label: 'Salir de Nexo', click: salir },
   ]);
   bandeja.setContextMenu(menu);
+}
+
+// Camara virtual y micro del iPhone, en el menu de la bandeja: durante un
+// directo el estudio esta oculto y esto es lo que queda a mano.
+function menuDirecto() {
+  const cam = ajustes.get('camaraVirtual');
+  const mic = ajustes.get('microIphone');
+  const e = camaraVirtual ? camaraVirtual.estado() : {};
+  let estadoCamara = 'Apagada';
+  if (cam.activa) {
+    if (e.motivo) estadoCamara = 'No sale: ' + e.motivo;
+    else if (e.enMarcha) estadoCamara = `Saliendo a ${e.tamano}: elige "OBS Virtual Camera"`;
+    else estadoCamara = 'Esperando al iPhone por cable';
+  }
+  const opcion = (label, clave, valor) => ({
+    label,
+    type: 'radio',
+    checked: cam[clave] === valor,
+    click: () => ajustarCamaraVirtual({ [clave]: valor }),
+  });
+  return [
+    {
+      label: 'Camara para TikTok, Zoom...',
+      submenu: [
+        { label: estadoCamara, enabled: false },
+        { type: 'separator' },
+        {
+          label: 'Activada',
+          type: 'checkbox',
+          checked: cam.activa,
+          click: (item) => ajustarCamaraVirtual({ activa: item.checked }),
+        },
+        {
+          label: 'Encuadre',
+          submenu: [
+            opcion('Completo (como lo manda el iPhone)', 'encuadre', null),
+            opcion('Cuadrado 1:1', 'encuadre', '1:1'),
+            opcion('Vertical 9:16', 'encuadre', '9:16'),
+            opcion('Vertical 4:5', 'encuadre', '4:5'),
+            opcion('Horizontal 16:9', 'encuadre', '16:9'),
+          ],
+        },
+        {
+          label: 'Girar',
+          submenu: [
+            opcion('Sin girar', 'giro', 0),
+            opcion('90 grados a la derecha', 'giro', 90),
+            opcion('180 grados', 'giro', 180),
+            opcion('90 grados a la izquierda', 'giro', 270),
+          ],
+        },
+        {
+          label: 'Reflejar (espejo)',
+          type: 'checkbox',
+          checked: cam.espejo,
+          click: (item) => ajustarCamaraVirtual({ espejo: item.checked }),
+        },
+      ],
+    },
+    {
+      label: 'Micro del iPhone al directo',
+      type: 'checkbox',
+      checked: mic.activo,
+      click: (item) => ajustarMicroIphone({ activo: item.checked }),
+    },
+    {
+      label: 'Volumen del micro del iPhone',
+      submenu: [50, 100, 150, 200, 300].map((nivel) => ({
+        label: nivel + ' %',
+        type: 'radio',
+        checked: mic.nivel === nivel,
+        click: () => ajustarMicroIphone({ nivel }),
+      })),
+    },
+  ];
 }
 
 // --- Ventana de la camara para TikTok ---------------------------------------
@@ -462,6 +635,10 @@ async function salir() {
     if (servidor) await servidor.detener();
     if (salidaAudio) salidaAudio.detener();
     if (puenteAudio) puenteAudio.detener();
+    if (microIphone) microIphone.detener();
+    // Apagarla marca la camara como parada: las aplicaciones que la tengan
+    // abierta vuelven a su cartel en vez de quedarse con la ultima imagen.
+    if (camaraVirtual) camaraVirtual.detener();
   } catch {
     /* da igual: estamos saliendo */
   }

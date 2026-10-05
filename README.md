@@ -41,9 +41,11 @@ Proyecto en construccion por fases. Cada fase deja algo funcional:
 La app de iPhone ya **compila** en macOS via GitHub Actions y genera un `.ipa`
 instalable. Para ponerlo en el iPhone por cable: ver **[INSTALAR-IPHONE.md](INSTALAR-IPHONE.md)**.
 
-Para llegar a TikTok o Zoom, la cadena es: Nexo Desktop recibe el video por el
-cable, la fuente de navegador de OBS lo toma de `http://localhost:8080/obs`, y la
-camara virtual de OBS lo publica al sistema. No hace falta instalar ningun driver.
+Nexo Desktop recibe el video por el cable y lo entrega de dos formas. A OBS, con
+una fuente de navegador en `http://localhost:8080/obs`. Y a TikTok LIVE Studio,
+Zoom o Discord, como una camara mas de Windows: se elige "OBS Virtual Camera" en
+la fuente "Camara" (Nexo alimenta la camara virtual que instala OBS, sin que OBS
+tenga que estar abierto). No hace falta instalar ningun driver.
 
 Una prueba automatica recorre todas las combinaciones de lente y formato contra
 el iPhone real y comprueba orientacion, proporcion, resolucion, fluidez,

@@ -1089,6 +1089,24 @@ if (elVentanaTikTok && window.nexo && typeof window.nexo.abrirVentanaTikTok === 
   elVentanaTikTok.addEventListener('click', () => window.nexo.abrirVentanaTikTok());
 }
 
+// Micro del iPhone al directo. El interruptor de verdad vive en el proceso
+// principal (tambien se cambia desde la bandeja), asi que el boton solo pinta
+// lo que el diga.
+const elMicroIphone = $('microIphone');
+if (elMicroIphone && window.nexo && typeof window.nexo.microIphone === 'function') {
+  const pintarMicro = (d) => {
+    const m = (d && d.microIphone) || {};
+    elMicroIphone.classList.toggle('activo', Boolean(m.activo));
+    elMicroIphone.textContent = m.activo ? 'Micro iPhone: en directo' : 'Micro iPhone';
+  };
+  elMicroIphone.hidden = false;
+  elMicroIphone.addEventListener('click', async () => {
+    pintarMicro(await window.nexo.microIphone({ activo: !elMicroIphone.classList.contains('activo') }));
+  });
+  window.nexo.onDirecto(pintarMicro);
+  window.nexo.estadoDirecto().then(pintarMicro);
+}
+
 const elReconectar = $('reconectar');
 if (elReconectar) {
   // Solo tiene sentido dentro de Nexo Desktop: en un navegador plano no hay

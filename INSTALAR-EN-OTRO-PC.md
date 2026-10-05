@@ -47,7 +47,9 @@ zip privado que **no se sube a GitHub**.
 - **Reaper**: Preferences › Audio › ASIO con el driver de la interfaz, 44 100 Hz.
 - **iPhone**: firmar `dist\Nexo-sin-firmar.ipa` con Sideloadly y tu Apple ID; luego
   doble clic en `instalar-guardian.bat` para que se renueve sola.
-- **TikTok LIVE Studio**: iniciar sesión y montar las secuencias.
+- **TikTok LIVE Studio**: iniciar sesión y montar las secuencias. La cámara de
+  Nexo se añade como fuente "Cámara" > "OBS Virtual Camera" (con Nexo abierto y
+  el iPhone por cable) y el audio es el micro "CABLE Output".
 - **En el PC viejo**, cuando el nuevo ya firme la app:
   `herramientas\instalar-guardian.ps1 -Desinstalar`. Con un Apple ID gratuito,
   dos PCs firmando se invalidan la firma el uno al otro.

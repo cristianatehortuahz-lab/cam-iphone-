@@ -124,6 +124,15 @@ else { Anotar 'FALTA' 'ReaPlugs (ReaStream)' 'reaper.fm/reaplugs, version x64, e
 $cable = Get-PnpDevice -Class AudioEndpoint -PresentOnly -ErrorAction SilentlyContinue | Where-Object FriendlyName -match '^CABLE Input'
 if ($cable) { Anotar 'OK' 'VB-Cable' } else { Anotar 'FALTA' 'VB-Cable (audio para TikTok)' 'vb-audio.com/Cable: VBCABLE_Setup_x64.exe como administrador y reinicia' }
 
+# La camara de Nexo como webcam usa el componente que registra el instalador de
+# OBS (nexo-desktop/src/main/camara-virtual.js). El ayudante que la alimenta lo
+# compila Nexo solo la primera vez, con el csc.exe que trae Windows.
+$camVirtual = Test-Path 'Registry::HKEY_CLASSES_ROOT\CLSID\{A3FCE0F5-3493-419F-958A-ABA1250EC20B}'
+$csc = Test-Path (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe')
+if ($camVirtual -and $csc) { Anotar 'OK' 'Camara virtual (fuente "Camara" en TikTok)' 'en las listas sale como "OBS Virtual Camera"' }
+elseif (-not $camVirtual) { Anotar 'FALTA' 'Camara virtual de OBS sin registrar' 'reinstala OBS Studio: su instalador la registra' }
+else { Anotar 'FALTA' 'Compilador de Windows (csc.exe)' 'activa .NET Framework 4.8 en "Activar o desactivar las caracteristicas de Windows"' }
+
 $sideloadly = Primero @((Join-Path $env:LOCALAPPDATA 'Sideloadly\sideloadly.exe'), 'C:\Program Files\Sideloadly\sideloadly.exe', 'C:\Program Files (x86)\Sideloadly\sideloadly.exe')
 if ($sideloadly) { Anotar 'OK' 'Sideloadly' } else { Anotar 'FALTA' 'Sideloadly (firma de la app del iPhone)' 'sideloadly.io' }
 
