@@ -81,18 +81,33 @@ let preparando = null;
 
 async function buscarDispositivo() {
   const lista = await navigator.mediaDevices.enumerateDevices();
-  return lista.find((d) => d.kind === 'audiooutput' && d.label.toLowerCase().includes(buscado)) || null;
+  // Se saltan las entradas "Predeterminado"/"Comunicaciones": si el cable es el
+  // predeterminado de Windows (lo deja asi el instalador de VB-Cable) salen como
+  // "Default - CABLE Input" y setSinkId('default') falla: "the device default is
+  // not found" (PC de la AIR 192|4, 02/10/2026).
+  return lista.find((d) => d.kind === 'audiooutput' && d.deviceId !== 'default' && d.deviceId !== 'communications' &&
+    d.label.toLowerCase().includes(buscado)) || null;
 }
 
 async function preparar(fs) {
   if (ctx) await ctx.close().catch(() => {});
-  ctx = new AudioContext({ sampleRate: fs, latencyHint: 'interactive' });
+  // El contexto nace YA en el cable (sinkId en el constructor). Antes nacia en el
+  // predeterminado de Windows y luego se movia con setSinkId: con el
+  // predeterminado tomado en exclusiva por ASIO4ALL (la M-Track Solo, 04/10/2026)
+  // Chromium caia a los altavoces Realtek y ahi se quedaba, aunque setSinkId no
+  // diera error: el directo sonaba por los altavoces del PC, se colaba por los
+  // micros y a TikTok no le llegaba nada.
+  ctx = new AudioContext({ sampleRate: fs, latencyHint: 'interactive', sinkId: dispositivo.deviceId });
+  if (ctx.sinkId !== dispositivo.deviceId) {
+    await ctx.close().catch(() => {});
+    ctx = null; nodo = null; fsActual = 0;
+    throw new Error('no se pudo abrir el cable: no suena por ningun otro dispositivo');
+  }
   const url = URL.createObjectURL(new Blob([PROCESADOR], { type: 'application/javascript' }));
   await ctx.audioWorklet.addModule(url);
   URL.revokeObjectURL(url);
   nodo = new AudioWorkletNode(ctx, 'salida-fl', { outputChannelCount: [2] });
   nodo.connect(ctx.destination);
-  await ctx.setSinkId(dispositivo.deviceId);
   await ctx.resume();
   fsActual = fs;
 }
@@ -106,7 +121,10 @@ async function revisar() {
       // Sin cable no suena nada: se cierra para no caer al dispositivo por defecto.
       if (ctx) { await ctx.close().catch(() => {}); ctx = null; nodo = null; fsActual = 0; }
     } else if (ctx && d.deviceId !== antes) {
-      await ctx.setSinkId(d.deviceId);
+      // Cambio de dispositivo: se cierra y el siguiente bloque de audio lo
+      // vuelve a abrir directamente en el nuevo (ver preparar).
+      await ctx.close().catch(() => {});
+      ctx = null; nodo = null; fsActual = 0;
     }
     window.salida.estado({ encontrado: Boolean(d), etiqueta: d ? d.label : null });
   } catch (e) {

@@ -17,8 +17,16 @@ a la carpeta de memoria de Claude de este proyecto; esta guia es solo el mapa.
   Sideloadly y un Apple ID gratuito: caduca a los 7 dias.
   `instalar-guardian.bat` deja el daemon de Sideloadly vivo para que la renueve
   sola. Solo un PC debe firmar.
+- `nexo-android/`: Nexo Cam para Android (Kotlin, Camera2 + MediaCodec, sin
+  dependencias). Mismo protocolo y mismo puerto 7000 que la de iPhone. Se compila
+  en GitHub Actions (`.github/workflows/android.yml`) y da un `.apk` que se instala
+  tal cual. Solo por cable y solo apaisada. El movil necesita la "Depuracion por
+  USB" activada.
 - `nexo-desktop/`: Nexo Desktop (Electron).
   - Transporte usbmux en `127.0.0.1:27015` hacia el puerto 7000 del iPhone.
+  - El cable hacia Android: `android.js`, con `adb forward` (adb en
+    `herramientas/platform-tools/`, que no va en el repo). Cada Android es una
+    camara mas, `cable-android-<serie>`.
   - Puente de audio ReaStream: `puente-audio.js`.
   - Salida del audio a VB-Cable para TikTok: `salida-audio.js`.
   - La camara como webcam de Windows: `camara-virtual.js` y su ayudante
@@ -28,6 +36,11 @@ a la carpeta de memoria de Claude de este proyecto; esta guia es solo el mapa.
   - Micro del iPhone al directo: `micro-iphone.js` lo decodifica y el puente lo
     mezcla en el audio que ya va a OBS y a TikTok. Interruptor en la bandeja y en
     el estudio; apagado por defecto.
+  - Un micro de OTRA interfaz hacia el DAW: `micro-windows.js` lo coge por Windows
+    y el puente lo emite como un ReaStream aparte (`nexo-solo`), al paso de los
+    paquetes del DAW. Una pista lo recibe con ReaStream en modo recibir (plantilla
+    "Directo - dos voces", `herramientas/reaper/plantilla-dos-voces.js`). Se activa
+    en `ajustes.json` > `microWindows`; apagado por defecto.
   - Ventana para TikTok (reserva, la via antigua): `herramientas/ventana-camara/`.
 - `legado/`: servidor embebido. Sirve el estudio (puerto 8080) y la fuente de
   OBS (`/obs`). `/api/nexo` da el estado de Nexo, solo desde el propio PC.
@@ -56,6 +69,13 @@ a la carpeta de memoria de Claude de este proyecto; esta guia es solo el mapa.
   FL y Reaper a la vez. `open_application` de computer-use abre una segunda
   instancia de FL. Para traerlo al frente usa
   `(New-Object -ComObject WScript.Shell).AppActivate(<PID>)`.
+- Dos interfaces a la vez NO se juntan con ASIO4ALL: mete rafagas de ruido en la
+  voz (medido el 04-05/10/2026, con el driver generico y con el de M-Audio). Se
+  juntan con VoiceMeeter Banana: la principal por su ASIO (A1), la otra por WDM,
+  cada micro a un lado del bus B1, y el DAW en "Voicemeeter Virtual ASIO" (entrada
+  1 y 2 = los dos micros; su salida va a las dos interfaces). VoiceMeeter abierto
+  ANTES que el DAW. Se maneja con `herramientas/voicemeeter.ps1`.
+  `micro-windows.js` queda de reserva: llega al DAW ~55 ms tarde.
 - FL: la entrada del Master en "In 1" mono, con "Monitorear la entrada externa:
   Activo". En "Cuando este armada" entra silencio tras abrir el proyecto.
 - ASIO Link Pro esta en version de prueba y corta el sonido a proposito. No se usa.

@@ -321,9 +321,15 @@ function iniciarSenalizacion(servidor) {
             msg.antesClaveMs !== undefined
               ? ` [antes de clave ${n(msg.antesClaveMs)}, tras clave ${n(msg.trasClaveMs)}, otros ${n(msg.otrosMs)}]`
               : '';
+          // Hueco a la entrada del decodificador y su cola: separan un atasco
+          // aguas arriba de uno del propio decodificador (02/10/2026).
+          const entrada =
+            msg.huecoLlegadaMaxMs !== undefined
+              ? ` (llegada max ${n(msg.huecoLlegadaMaxMs)} ms, cola max ${n(msg.colaMax)}, ${msg.porHardware ? 'GPU' : 'CPU'})`
+              : '';
           console.log(
             `[video] ${origen}: llegan ${n(msg.llegadas)} pintados ${n(msg.pintados)} ` +
-              `hueco max ${n(msg.huecoMaxMs)} ms${donde}${msg.visible === false ? ' (oculta)' : ''}`
+              `hueco max ${n(msg.huecoMaxMs)} ms${entrada}${donde}${msg.visible === false ? ' (oculta)' : ''}`
           );
           break;
         }

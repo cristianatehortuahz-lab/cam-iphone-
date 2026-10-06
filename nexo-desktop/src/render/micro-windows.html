@@ -1,0 +1,107 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Nexo - micro de Windows</title>
+<script>
+'use strict';
+
+// Ventana oculta de micro-windows.js: abre el microfono de Windows cuyo nombre
+// contenga el texto pedido y entrega su audio en crudo, un canal.
+
+const consulta = new URLSearchParams(location.search);
+const buscado = (consulta.get('dispositivo') || '').toLowerCase();
+const canal = Number(consulta.get('canal') || 0);
+
+let pista = null;
+let lector = null;
+let etiqueta = null;
+
+async function buscarDispositivo() {
+  const lista = await navigator.mediaDevices.enumerateDevices();
+  // Como en salida-audio.html: las entradas "Predeterminado" y "Comunicaciones"
+  // repiten el nombre de otro dispositivo y no son el.
+  return lista.find((d) => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications' &&
+    d.label.toLowerCase().includes(buscado)) || null;
+}
+
+function soltar() {
+  if (lector) lector.cancel().catch(() => {});
+  if (pista) pista.stop();
+  lector = null;
+  pista = null;
+  etiqueta = null;
+}
+
+async function abrir(d) {
+  const flujo = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      deviceId: { exact: d.deviceId },
+      // Tal cual entra: es una voz para un directo de musica, no una llamada.
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: 2,
+    },
+  });
+  pista = flujo.getAudioTracks()[0];
+  etiqueta = d.label;
+  pista.addEventListener('ended', () => { soltar(); revisar(); });
+
+  // El audio se lee directamente de la pista (MediaStreamTrackProcessor), sin
+  // AudioContext: un contexto corre al ritmo de SU salida y el micro al de su
+  // interfaz, y entre los dos Chromium tira o repite bloques sin avisar. Leido
+  // asi llega al ritmo del micro, y la deriva la corrige el puente contra el
+  // reloj del DAW, que es el unico que importa.
+  lector = new MediaStreamTrackProcessor({ track: pista }).readable.getReader();
+  const mio = lector;
+  (async () => {
+    for (;;) {
+      const { value: datos, done } = await mio.read();
+      if (done || mio !== lector) { if (datos) datos.close(); return; }
+      try {
+        const c = Math.min(canal, datos.numberOfChannels - 1);
+        const pcm = new Float32Array(datos.numberOfFrames);
+        if (datos.format.endsWith('-planar')) {
+          datos.copyTo(pcm, { planeIndex: c, format: 'f32-planar' });
+        } else {
+          // Intercalado: se saca el canal pedido.
+          const todo = new Float32Array(datos.numberOfFrames * datos.numberOfChannels);
+          datos.copyTo(todo, { planeIndex: 0, format: 'f32' });
+          for (let i = 0; i < pcm.length; i++) pcm[i] = todo[i * datos.numberOfChannels + c];
+        }
+        window.micro.pcm(datos.sampleRate, pcm);
+      } finally {
+        datos.close();
+      }
+    }
+  })().catch((e) => window.micro.estado({ encontrado: Boolean(pista), etiqueta, error: e.message }));
+}
+
+let revisando = false;
+async function revisar() {
+  if (revisando) return;
+  revisando = true;
+  try {
+    // Sin permiso concedido los nombres vienen vacios: la primera vez se pide
+    // el micro por defecto un instante solo para que aparezcan.
+    let d = await buscarDispositivo();
+    if (!d && !pista) {
+      const prueba = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => null);
+      if (prueba) prueba.getTracks().forEach((t) => t.stop());
+      d = await buscarDispositivo();
+    }
+    if (!d) soltar();
+    else if (!pista) await abrir(d);
+    window.micro.estado({ encontrado: Boolean(pista), etiqueta });
+  } catch (e) {
+    soltar();
+    window.micro.estado({ encontrado: false, error: e.message });
+  } finally {
+    revisando = false;
+  }
+}
+
+navigator.mediaDevices.addEventListener('devicechange', revisar);
+revisar();
+// Por si la interfaz se enchufa con Nexo abierto y no llega el aviso de cambio.
+setInterval(revisar, 5000);
+</script>

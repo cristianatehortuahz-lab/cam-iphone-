@@ -40,7 +40,11 @@
 
   // Telemetria hacia el registro de Nexo Desktop, igual que la de la fuente de
   // OBS: tramas que llegan, fotogramas pintados y el hueco mas largo entre dos.
-  const telemetria = { llegadas: 0, pintados: 0, huecoMax: 0, ultimo: 0 };
+  // huecoLlegadaMax mide lo mismo a la ENTRADA del decodificador: si el hueco de
+  // pintado es grande y el de llegada tambien, el atasco es aguas arriba (movil,
+  // cable o proceso principal), no del decodificador. Añadido el 02/10/2026: en el
+  // PC del RTX 5060 habia huecos de ~440 ms y el decodificador solo no los da.
+  const telemetria = { llegadas: 0, pintados: 0, huecoMax: 0, ultimo: 0, huecoLlegadaMax: 0, ultimaLlegada: 0, colaMax: 0 };
 
   // Lo mismo, pero para el panel "Datos" del estudio, que lo lee cada segundo.
   // Va aparte porque la telemetria se vacia cada 5 s al mandarla al registro.
@@ -118,9 +122,14 @@
     const datos = v.datos instanceof Uint8Array
       ? v.datos
       : new Uint8Array(v.datos.buffer || v.datos, v.datos.byteOffset || 0, v.datos.length || v.datos.byteLength);
+    const ahora = performance.now();
+    if (telemetria.ultimaLlegada) telemetria.huecoLlegadaMax = Math.max(telemetria.huecoLlegadaMax, ahora - telemetria.ultimaLlegada);
+    telemetria.ultimaLlegada = ahora;
     telemetria.llegadas++;
     medidor.bytes += datos.byteLength;
     decodificador.decodificar(datos, v.microsegundos, v.clave);
+    const cola = decodificador.decoder ? decodificador.decoder.decodeQueueSize : 0;
+    telemetria.colaMax = Math.max(telemetria.colaMax, cola);
   });
 
   setInterval(() => {
@@ -131,11 +140,16 @@
       llegadas: telemetria.llegadas,
       pintados: telemetria.pintados,
       huecoMaxMs: telemetria.huecoMax,
+      huecoLlegadaMaxMs: telemetria.huecoLlegadaMax,
+      colaMax: telemetria.colaMax,
+      porHardware: decodificador.porHardware,
       visible: document.visibilityState !== 'hidden',
     });
     telemetria.llegadas = 0;
     telemetria.pintados = 0;
     telemetria.huecoMax = 0;
+    telemetria.huecoLlegadaMax = 0;
+    telemetria.colaMax = 0;
   }, 5000);
 
   // Traduce el estado del transporte nativo a algo util en la pantalla de

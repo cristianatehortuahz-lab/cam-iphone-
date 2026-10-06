@@ -68,11 +68,21 @@ $ClaveRegistroFL = Valor $cfgPC.fl.claveRegistro 'HKCU:\Software\Image-Line\FL S
 $Electron = Join-Path $Raiz 'node_modules\electron\dist\electron.exe'
 $FLexe = Valor $cfgPC.fl.exe 'C:\Program Files\Image-Line\FL Studio 21\FL64.exe'
 $ReaperExe = Valor $cfgPC.reaper.exe 'C:\Program Files\REAPER (x64)\reaper.exe'
-$PlantillaReaper = Join-Path $env:APPDATA 'REAPER\ProjectTemplates\Directo - cantar.RPP'
+# Driver y plantilla de Reaper: por defecto el ASIO de la interfaz y "Directo -
+# cantar". config-pc.json los cambia en el PC de las dos interfaces (AIR + M-Track
+# Solo), que las junta con VoiceMeeter Banana ("Voicemeeter Virtual ASIO") y usa
+# "Directo - dos voces". ASIO4ALL metia ruido en la voz (04-05/10/2026).
+$DriverReaper = Valor $cfgPC.reaper.asio $DriverFL
+$NombrePlantilla = Valor $cfgPC.reaper.plantilla 'Directo - cantar'
+$PlantillaReaper = Join-Path $env:APPDATA "REAPER\ProjectTemplates\$NombrePlantilla.RPP"
 $ChromeExe = Valor $cfgPC.chrome 'C:\Program Files\Google\Chrome\Application\chrome.exe'
 $OBSexe = Valor $cfgPC.obs.exe 'C:\Program Files\obs-studio\bin\64bit\obs64.exe'
 $TikTokExe = Valor $cfgPC.tiktok 'C:\Program Files\TikTok LIVE Studio\TikTok LIVE Studio Launcher.exe'
 $ApiNexo = 'http://localhost:8080/api/nexo'
+# Lado mayor de la camara a partir del cual se avisa. 1280 (720p) en el PC
+# original, que iba justo; config-pc.json lo sube en PCs con mas recursos (1920
+# en el del RTX 5060: 4K pasa limpio, pero sus claves dan un tiron de ~68 ms).
+$LadoMaxCamara = [int](Valor $cfgPC.camara.ladoMax 1280)
 
 # Programas de fondo que no pintan nada en un directo y no pierden datos al
 # cerrarlos: se cierran sin preguntar.
@@ -173,15 +183,24 @@ Write-Host ''
 Write-Host '  NEXO - Preparando el directo' -ForegroundColor White
 Write-Host '  ============================' -ForegroundColor White
 
+# Hay PCs sin FL Studio (el de la AIR 192|4, 02/10/2026): ahi todo va con Reaper
+# y el modo Producir no se ofrece.
+$HayFL = Test-Path $FLexe
+if ($Modo -eq 'Producir' -and -not $HayFL) {
+  Write-Host '  FL Studio no esta en este PC: uso Reaper (modo Componer)' -ForegroundColor Yellow
+  $Modo = 'Componer'
+}
 if (-not $Modo) {
   if ($Desatendido -or $SoloComprobar) { $Modo = 'Componer' }
   else {
     Write-Host ''
     Write-Host '  1) Karaoke   - solo TikTok: Reaper (voz) + karaoke de YouTube en Chrome'
     Write-Host '  2) Componer  - YouTube y TikTok: Reaper con el beat y la voz'
-    Write-Host '  3) Producir  - YouTube y TikTok: FL Studio'
-    $r = Read-Host '  Modo? (1/2/3, Enter = 2)'
-    $Modo = switch ($r.Trim()) { '1' { 'Karaoke' } '3' { 'Producir' } default { 'Componer' } }
+    if ($HayFL) {
+      Write-Host '  3) Producir  - YouTube y TikTok: FL Studio'
+      $r = Read-Host '  Modo? (1/2/3, Enter = 2)'
+    } else { $r = Read-Host '  Modo? (1/2, Enter = 2)' }
+    $Modo = switch ($r.Trim()) { '1' { 'Karaoke' } '3' { if ($HayFL) { 'Producir' } else { 'Componer' } } default { 'Componer' } }
   }
 }
 $UsaOBS = $Modo -ne 'Karaoke'
@@ -260,10 +279,25 @@ if ($UsaReaper) {
   Cerrar-Daw 'FL64' 'FL Studio' | Out-Null
   $ini = Join-Path $env:APPDATA 'REAPER\reaper.ini'
   $cfg = Get-Content $ini -ErrorAction SilentlyContinue
-  if (($cfg -match '^mode=3$') -and ($cfg -match [regex]::Escape("asio_driver_name=`"$DriverFL`""))) { Anotar 'OK' 'Reaper usa el driver de la M-Audio' }
-  else { Anotar 'FALLO' 'Reaper no esta en el driver de la M-Audio' "Options > Preferences > Audio > Device: ASIO, $DriverFL" }
-  if (Test-Path $PlantillaReaper) { Anotar 'OK' 'Plantilla de Reaper "Directo - cantar"' }
+  if (($cfg -match '^mode=3$') -and ($cfg -match [regex]::Escape("asio_driver_name=`"$DriverReaper`""))) { Anotar 'OK' 'Reaper usa su driver de audio' $DriverReaper }
+  else { Anotar 'FALLO' 'Reaper no esta en su driver de audio' "Options > Preferences > Audio > Device: ASIO, $DriverReaper" }
+  if (Test-Path $PlantillaReaper) { Anotar 'OK' "Plantilla de Reaper `"$NombrePlantilla`"" }
   else { Anotar 'FALLO' 'Falta la plantilla de Reaper' 'herramientas\reaper\crear-plantilla-directo.lua' }
+  # Con el driver de VoiceMeeter, VoiceMeeter tiene que estar abierto ANTES que
+  # Reaper: es su motor el que mueve el audio de las dos interfaces. Guarda su
+  # configuracion al cerrarse y la recupera solo.
+  if ($DriverReaper -match 'Voicemeeter') {
+    $vmExe = 'C:\Program Files (x86)\VB\Voicemeeter\voicemeeterpro.exe'
+    if (Get-Process voicemeeterpro -ErrorAction SilentlyContinue) { Anotar 'OK' 'VoiceMeeter en marcha (junta las dos interfaces)' }
+    elseif (-not (Test-Path $vmExe)) { Anotar 'FALLO' 'Falta VoiceMeeter Banana' 'vb-audio.com/Voicemeeter/banana.htm' }
+    elseif ($SoloComprobar) { Anotar 'FALLO' 'VoiceMeeter no esta abierto' 'sin el, Reaper no tiene audio' }
+    else {
+      Start-Process -FilePath $vmExe
+      Start-Sleep -Seconds 5
+      if (Get-Process voicemeeterpro -ErrorAction SilentlyContinue) { Anotar 'OK' 'VoiceMeeter abierto (junta las dos interfaces)' }
+      else { Anotar 'FALLO' 'VoiceMeeter no se abrio' $vmExe }
+    }
+  }
 } else {
   Paso 'Audio de FL Studio'
   Cerrar-Daw 'reaper' 'Reaper' | Out-Null
@@ -334,7 +368,7 @@ if (-not $SoloComprobar -and $nexo) {
       Write-Host '  abriendo Reaper (si sale el aviso de la licencia de evaluacion, cierralo)...'
       Colocar (Esperar-Ventana 'REAPER' 'REAPERwnd' 40) $externa
     }
-    if (Get-Process reaper -ErrorAction SilentlyContinue) { Anotar 'OK' 'Reaper (plantilla Directo - cantar)' } else { Anotar 'FALLO' 'Reaper no se abrio' }
+    if (Get-Process reaper -ErrorAction SilentlyContinue) { Anotar 'OK' "Reaper (plantilla $NombrePlantilla)" } else { Anotar 'FALLO' 'Reaper no se abrio' }
   } else {
     if (-not (Get-Process FL64 -ErrorAction SilentlyContinue)) {
       if (Test-Path $ProyectoFL) { Start-Process -FilePath $FLexe -ArgumentList "`"$ProyectoFL`"" }
@@ -397,8 +431,8 @@ if ($nexo -and $nexo.iphone.conectado -and $nexo.iphone.transmitiendo) {
   # La app del iPhone puede colgarse con el video todavia saliendo: deja de
   # atender ordenes (01/10/2026). Solo se arregla cerrandola en el movil.
   if ($nexo.iphone.responde -eq $false) { Anotar 'FALLO' 'El iPhone emite pero no atiende ordenes' 'cierra Nexo Cam en el iPhone y vuelve a abrirla' }
-  elseif ($lado -le 1280) { Anotar 'OK' 'iPhone emitiendo por cable' "$res a $($nexo.iphone.fps) fps" }
-  else { Anotar 'AVISO' 'iPhone emitiendo, pero en alta resolucion' "${res}: el PC va justo, elige 720p en el estudio de Nexo" }
+  elseif ($lado -le $LadoMaxCamara) { Anotar 'OK' 'iPhone emitiendo por cable' "$res a $($nexo.iphone.fps) fps" }
+  else { Anotar 'AVISO' 'iPhone emitiendo, pero en alta resolucion' "${res}: elige $(if ($LadoMaxCamara -ge 1920) { '1080p' } else { '720p' }) horizontal en el estudio de Nexo" }
 } elseif ($nexo -and $nexo.iphone.hayCable) {
   Anotar 'FALLO' 'iPhone conectado pero sin emitir' 'abre Nexo Cam y dejala en pantalla'
 } else {

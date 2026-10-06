@@ -147,6 +147,101 @@ function hilo() {
     paquete.toString('latin1', 0, 4) === 'MRSR' &&
     paquete.toString('latin1', 8, 40).replace(/\0+$/, '') === ID_MEZCLA;
 
+  // --- Micro de otra interfaz, hacia el DAW ---------------------------------
+  //
+  // Un segundo microfono enchufado a OTRA interfaz (la M-Track Solo junto a la
+  // AIR 192|4). El DAW solo admite un driver ASIO, y juntarlas con ASIO4ALL metia
+  // rafagas de ruido en la voz (medido el 04 y 05/10/2026: con el ASIO propio de
+  // la Solo, 0 chasquidos; con ASIO4ALL, hasta 2,5 por segundo). Aqui el micro
+  // entra por Windows (micro-windows.js) y se le entrega al DAW como un ReaStream
+  // aparte, que una pista recibe con el plugin en modo recibir: se puede grabar
+  // y llevar efectos como cualquier otra.
+  //
+  // No se suma a los paquetes del DAW (como el micro del iPhone) sino que se
+  // manda uno propio por cada paquete suyo, con las mismas muestras: asi va al
+  // paso del reloj de la interfaz del DAW y no al de la otra, que es justo lo
+  // que ASIO4ALL no sabia cuadrar. Mismo colchon y misma correccion que arriba.
+  const EXTRA_CAP = 96000 * 2;
+  const extra = new Float32Array(EXTRA_CAP);
+  let extraLee = 0;
+  let extraEscribe = 0;
+  let extraLleno = 0;
+  // Colchon corto: cada ms de aqui es retraso de esa voz en el DAW. Windows
+  // entrega el micro en trozos de 10 ms, asi que por debajo de ~12 se vaciaria
+  // a cada rato. Con 40 ms el retraso se notaba al oirse (05/10/2026).
+  const EXTRA_COLCHON = 0.015;
+  let extraFs = 44100;
+  let extraObjetivo = Math.round(extraFs * EXTRA_COLCHON);
+  let extraActivo = false;
+  let extraId = 'nexo-solo';
+  let extraEnMarcha = false;
+  let extraUltimo = 0;
+
+  function meterExtra(pcm, fs) {
+    if (fs !== extraFs) {
+      extraFs = fs;
+      extraObjetivo = Math.round(fs * EXTRA_COLCHON);
+      extraLee = extraEscribe = extraLleno = 0;
+      extraEnMarcha = false;
+    }
+    for (let i = 0; i < pcm.length; i++) {
+      extra[extraEscribe] = pcm[i];
+      extraEscribe = (extraEscribe + 1) % EXTRA_CAP;
+    }
+    extraLleno += pcm.length;
+    extraUltimo = Date.now();
+    if (extraLleno > extraObjetivo * 4) {
+      extraLee = (extraEscribe - extraObjetivo + EXTRA_CAP) % EXTRA_CAP;
+      extraLleno = extraObjetivo;
+    }
+  }
+
+  // Un paquete mono del micro, con tantas muestras como el del DAW que acaba de
+  // llegar y a su misma frecuencia.
+  function emitirExtra(paqueteDaw) {
+    if (!extraActivo || Date.now() - extraUltimo > 500) {
+      extraEnMarcha = false;
+      extraLleno = 0;
+      extraLee = extraEscribe;
+      return;
+    }
+    const canales = paqueteDaw.readUInt8(40);
+    const fs = paqueteDaw.readUInt32LE(41);
+    const porCanal = paqueteDaw.readUInt16LE(45) / 4 / canales;
+    if (!canales || !fs || !Number.isInteger(porCanal)) return;
+
+    const desvio = (extraLleno - extraObjetivo) / extraObjetivo;
+    const paso = (extraFs / fs) * (1 + Math.max(-0.01, Math.min(0.01, desvio * 0.02)));
+    if (!extraEnMarcha) {
+      if (extraLleno < extraObjetivo) return;
+      extraEnMarcha = true;
+    }
+    if (extraLleno < porCanal * paso + 2) {
+      extraEnMarcha = false;
+      return;
+    }
+    // Dos canales con lo mismo: con uno solo, el ReaStream de la pista lo deja
+    // en el izquierdo y la voz se oia a un lado (05/10/2026).
+    const paquete = Buffer.alloc(CABECERA + porCanal * 2 * 4);
+    paquete.write('MRSR', 0, 'latin1');
+    paquete.writeUInt32LE(paquete.length, 4);
+    paquete.write(extraId, 8, 'latin1');
+    paquete.writeUInt8(2, 40);
+    paquete.writeUInt32LE(fs, 41);
+    paquete.writeUInt16LE(porCanal * 2 * 4, 45);
+    for (let i = 0; i < porCanal; i++) {
+      const a = Math.floor(extraLee);
+      const parte = extraLee - a;
+      const s = extra[a] * (1 - parte) + extra[(a + 1) % EXTRA_CAP] * parte;
+      paquete.writeFloatLE(s, CABECERA + i * 4);
+      paquete.writeFloatLE(s, CABECERA + (porCanal + i) * 4);
+      extraLee += paso;
+      if (extraLee >= EXTRA_CAP) extraLee -= EXTRA_CAP;
+    }
+    extraLleno -= porCanal * paso;
+    salida.send(paquete, puerto, DIFUSION);
+  }
+
   parentPort.on('message', (m) => {
     if (m && m.tipo === 'salida') {
       identificadorSalida = m.activa ? m.identificador : null;
@@ -159,6 +254,11 @@ function hilo() {
       relojFabrica = micActivo ? setInterval(fabricar, 3) : null;
     } else if (m && m.tipo === 'micro-pcm') {
       if (micActivo) meterMicro(m.pcm);
+    } else if (m && m.tipo === 'extra') {
+      extraActivo = Boolean(m.activo);
+      if (m.identificador) extraId = String(m.identificador).slice(0, 31);
+    } else if (m && m.tipo === 'extra-pcm') {
+      if (extraActivo) meterExtra(m.pcm, m.fs);
     }
   });
 
@@ -206,6 +306,7 @@ function hilo() {
       if (origen.port === puertoSalida && origen.address === LOCAL) return;
       if (esDeMezcla(paquete)) {
         dawUltimo = Date.now();
+        emitirExtra(paquete);
         mezclar(paquete);
       }
       salida.send(paquete, puerto, DIFUSION);
@@ -320,6 +421,18 @@ class PuenteAudio extends EventEmitter {
   // (micro-iphone.js). Se entrega al hilo sin copiarlo.
   microPcm(pcm) {
     if (this.hilo) this.hilo.postMessage({ tipo: 'micro-pcm', pcm }, [pcm.buffer]);
+  }
+
+  // Enciende o apaga el ReaStream del micro de otra interfaz hacia el DAW, con
+  // el identificador que escucha su pista.
+  extra(activo, identificador = 'nexo-solo') {
+    if (this.hilo) this.hilo.postMessage({ tipo: 'extra', activo, identificador });
+  }
+
+  // Audio de ese micro: Float32Array mono a la frecuencia a la que lo entrega
+  // Windows (micro-windows.js). Se entrega al hilo sin copiarlo.
+  extraPcm(fs, pcm) {
+    if (this.hilo) this.hilo.postMessage({ tipo: 'extra-pcm', fs, pcm }, [pcm.buffer]);
   }
 
   detener() {

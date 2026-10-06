@@ -21,6 +21,10 @@ const POR_DEFECTO = {
   // El micro del iPhone mezclado en el audio del directo (micro-iphone.js).
   // Apagado por defecto: tambien recoge la voz sin Auto-Tune. nivel en %.
   microIphone: { activo: false, nivel: 100 },
+  // Un micro de OTRA interfaz de audio hacia una pista del DAW (micro-windows.js).
+  // dispositivo: trozo del nombre de su entrada en Windows ('M-Track Solo').
+  // identificador: el del ReaStream en modo recibir de esa pista. canal: 0 = In 1.
+  microWindows: { activo: false, dispositivo: '', identificador: 'nexo-solo', canal: 0 },
 };
 
 class Ajustes {

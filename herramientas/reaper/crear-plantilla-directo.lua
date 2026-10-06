@@ -3,7 +3,7 @@
 -- linea de comandos). Deja el proyecto abierto y lo guarda como plantilla.
 --
 --   Pista "Voz":  entrada In 1 de la M-Audio en mono, armada y con monitoreo
---                 (se oye y suena en el directo, pero no graba), Auto-Tune Artist.
+--                 (se oye y suena en el directo, pero no graba), sin efectos.
 --   Pista "Beat": vacia; ahi se arrastra el instrumental.
 --   Master:       ReaLimit (que nunca sature) y ReaStream enviando a OBS
 --                 y TikTok, igual que hace FL: identificador "nexo-fl",
@@ -30,8 +30,8 @@ reaper.SetMediaTrackInfo_Value(voz, "I_RECINPUT", 0)  -- In 1, mono
 reaper.SetMediaTrackInfo_Value(voz, "I_RECMODE", 2)   -- solo monitoreo: no graba
 reaper.SetMediaTrackInfo_Value(voz, "I_RECMON", 1)    -- monitoreo activado
 reaper.SetMediaTrackInfo_Value(voz, "I_RECARM", 1)    -- armada: sin esto no se oye
-local at = reaper.TrackFX_AddByName(voz, "VST3: Auto-Tune Artist (Antares)", false, -1)
-if at < 0 then aviso("AVISO: no encontre Auto-Tune Artist; anadelo a mano en la pista Voz") end
+-- Sin efectos en la voz: los plugins (Auto-Tune incluido) los pone el usuario a
+-- mano (pedido el 04/10/2026). Antes se anadia aqui Auto-Tune Artist.
 
 -- Beat
 reaper.InsertTrackAtIndex(1, true)

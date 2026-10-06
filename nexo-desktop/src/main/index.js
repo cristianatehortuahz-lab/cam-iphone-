@@ -10,6 +10,7 @@ const { PuenteAudio } = require('./puente-audio');
 const { SalidaAudio } = require('./salida-audio');
 const { CamaraVirtual } = require('./camara-virtual');
 const { MicroIphone } = require('./micro-iphone');
+const { MicroWindows } = require('./micro-windows');
 const { rutaLegado } = require('./clave');
 
 // El servidor legado (auditado) corre embebido dentro de la app: sirve el
@@ -36,6 +37,7 @@ let salidaAudio = null; // FL Studio -> VB-Cable -> TikTok LIVE Studio (ver sali
 let salidaAudioEstado = { encontrado: false, etiqueta: null };
 let camaraVirtual = null; // el video del iPhone como webcam de Windows (ver camara-virtual.js)
 let microIphone = null; // el micro del iPhone hacia el directo (ver micro-iphone.js)
+let microWindows = null; // un micro de otra interfaz hacia el DAW (ver micro-windows.js)
 const grabador = new Grabador();
 let saliendoDeVerdad = false;
 
@@ -61,6 +63,7 @@ async function arrancar() {
   await iniciarConexionNativa();
   await iniciarPuenteAudio();
   iniciarMicroIphone();
+  iniciarMicroWindows();
   crearVentana();
   crearBandeja();
   aplicarArranqueConWindows();
@@ -105,6 +108,7 @@ function estadoNexo() {
     audioFL: { puente: Boolean(puenteAudio), llega: audioFLLlega },
     camaraVirtual: camaraVirtual ? camaraVirtual.estado() : null,
     microIphone: microIphone ? microIphone.estado() : null,
+    microWindows: microWindows ? microWindows.estado() : null,
     salidaTikTok: { activa: salidaAudioEstado.encontrado, dispositivo: salidaAudioEstado.etiqueta },
     grabando: grabador.grabando,
   };
@@ -202,6 +206,33 @@ function iniciarMicroIphone() {
     console.log(`[micro] iPhone al directo: ${microIphone.estado().llega ? nivel : 'no llega audio del iPhone'}`);
   }, 10000).unref();
   aplicarMicroIphone(conf);
+}
+
+// Un segundo micro, enchufado a otra interfaz de audio, hacia una pista del DAW
+// (ver micro-windows.js). Solo existe si ajustes.json nombra el dispositivo.
+function iniciarMicroWindows() {
+  const conf = ajustes.get('microWindows');
+  if (!conf || !conf.activo || !conf.dispositivo || !puenteAudio) return;
+  microWindows = new MicroWindows({ dispositivo: conf.dispositivo, canal: conf.canal || 0 });
+  microWindows.on('pcm', (fs, pcm) => puenteAudio.extraPcm(fs, pcm));
+  let antes = null;
+  microWindows.on('estado', (e) => {
+    if (e.error) console.error('[micro] entrada de', conf.dispositivo + ':', e.error);
+    if (antes === e.encontrado) return;
+    antes = e.encontrado;
+    console.log(
+      e.encontrado
+        ? `[micro] ${e.dispositivo} va al DAW como ReaStream "${conf.identificador}"`
+        : `[micro] no hay ninguna entrada "${conf.dispositivo}": ese micro no llega al DAW`
+    );
+  });
+  setInterval(() => {
+    const pico = microWindows.leerPico();
+    const nivel = pico > 0 ? `pico ${Math.round(20 * Math.log10(pico))} dB` : 'silencio';
+    console.log(`[micro] ${conf.dispositivo} al DAW: ${microWindows.estado().llega ? nivel : 'no llega audio'}`);
+  }, 10000).unref();
+  puenteAudio.extra(true, conf.identificador);
+  microWindows.iniciar();
 }
 
 function aplicarMicroIphone(conf) {
@@ -636,6 +667,7 @@ async function salir() {
     if (salidaAudio) salidaAudio.detener();
     if (puenteAudio) puenteAudio.detener();
     if (microIphone) microIphone.detener();
+    if (microWindows) microWindows.detener();
     // Apagarla marca la camara como parada: las aplicaciones que la tengan
     // abierta vuelven a su cartel en vez de quedarse con la ultima imagen.
     if (camaraVirtual) camaraVirtual.detener();

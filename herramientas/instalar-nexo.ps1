@@ -107,7 +107,8 @@ if ($faltan) {
 # Los de licencia, driver o sin winget: se comprueban y se da el enlace.
 $flExe = Primero ((Get-ChildItem 'C:\Program Files\Image-Line' -Directory -Filter 'FL Studio*' -ErrorAction SilentlyContinue |
   Sort-Object Name -Descending | ForEach-Object { Join-Path $_.FullName 'FL64.exe' }))
-if ($flExe) { Anotar 'OK' 'FL Studio' $flExe } else { Anotar 'FALTA' 'FL Studio' 'instalalo con tu cuenta de image-line.com' }
+# FL es opcional: sin el, los directos van con Reaper (PC de la AIR 192|4, 02/10/2026).
+if ($flExe) { Anotar 'OK' 'FL Studio' $flExe } else { Anotar 'AVISO' 'FL Studio no esta (opcional)' 'los directos van con Reaper; el modo Producir no se ofrece' }
 
 $autoTune = Get-ChildItem 'C:\Program Files\Common Files\VST3', 'C:\Program Files\VSTPlugins' -Recurse -Filter '*Auto-Tune*' -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($autoTune) { Anotar 'OK' 'Auto-Tune' $autoTune.Name } else { Anotar 'FALTA' 'Auto-Tune Artist' 'instalalo y activalo con tu cuenta de Antares' }
@@ -152,6 +153,19 @@ elseif (-not $SoloComprobar) {
   if (Test-Path $electron) { Anotar 'OK' 'Dependencias instaladas (npm ci)' } else { Anotar 'FALTA' 'npm ci fallo' 'mira el mensaje de arriba' }
 } else { Anotar 'FALTA' 'Dependencias sin instalar' 'npm ci en la raiz' }
 
+# legado no es un workspace de la raiz: tiene su propio package.json. Sin su
+# npm ci el servidor del estudio (8080, la camara de OBS) no arranca: "Cannot
+# find module 'ws'" en el PC de la AIR 192|4, 02/10/2026.
+$ws = Join-Path $Raiz 'legado\node_modules\ws'
+if (Test-Path $ws) { Anotar 'OK' 'Dependencias del servidor (legado) ya instaladas' }
+elseif (-not (Get-Command npm -ErrorAction SilentlyContinue)) { Anotar 'FALTA' 'npm' 'instala Node.js y vuelve a pasar el instalador' }
+elseif (-not $SoloComprobar) {
+  Push-Location (Join-Path $Raiz 'legado')
+  npm ci
+  Pop-Location
+  if (Test-Path $ws) { Anotar 'OK' 'Dependencias del servidor instaladas (legado)' } else { Anotar 'FALTA' 'npm ci de legado fallo' 'mira el mensaje de arriba' }
+} else { Anotar 'FALTA' 'Dependencias del servidor sin instalar' 'npm ci en legado' }
+
 # ------------------------------------------------------ 3. config-pc.json ----
 
 Paso 'Configuracion de este PC'
@@ -174,12 +188,19 @@ $config = [ordered]@{
   tiktok = $tiktok
 }
 $archivoCfg = Join-Path $Raiz 'config-pc.json'
+# Lo ajustado a mano para este PC (camara.ladoMax) se conserva al repasar.
+try { $previo = Get-Content $archivoCfg -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $previo = $null }
+if ($previo -and $previo.camara) { $config.camara = $previo.camara }
+# Igual con el driver y la plantilla de Reaper (ASIO4ALL y "Directo - dos voces"
+# en el PC de las dos interfaces): iniciar-directo.ps1 los lee de aqui.
+if ($previo -and $previo.reaper.asio) { $config.reaper.asio = $previo.reaper.asio }
+if ($previo -and $previo.reaper.plantilla) { $config.reaper.plantilla = $previo.reaper.plantilla }
 if (-not $SoloComprobar) {
   # Sin BOM: tambien lo puede leer Node.
   [IO.File]::WriteAllText($archivoCfg, ($config | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
   Anotar 'OK' 'config-pc.json escrito' "interfaz: $(if ($driverAsio) { $driverAsio } else { "$Interfaz (sin driver todavia)" })"
 }
-if (-not $claveFLRuta) { Anotar 'AVISO' 'FL aun no se ha abierto nunca' 'abrelo una vez y vuelve a pasar el instalador para fijar su driver' }
+if ($flExe -and -not $claveFLRuta) { Anotar 'AVISO' 'FL aun no se ha abierto nunca' 'abrelo una vez y vuelve a pasar el instalador para fijar su driver' }
 
 # ---------------------------------------------------------- 4. Kit privado --
 
@@ -216,7 +237,7 @@ if ($carpetaKit) {
     }
     Anotar 'OK' 'Perfiles y escenas de OBS' "Nexo Horizontal y Nexo Vertical$copia"
     Anotar 'AVISO' 'OBS: clave de emision de YouTube' 'Ajustes > Emision: pegala de nuevo (no viaja en el kit)'
-    Anotar 'AVISO' 'OBS: pantalla que se captura' 'escena Estudio > Pantalla > Propiedades: elige el monitor donde va FL'
+    Anotar 'AVISO' 'OBS: pantalla que se captura' 'escena Estudio > Pantalla > Propiedades: elige el monitor donde va el DAW'
 
     # La fuente "FL Studio (ReaStream)" se apoya en una entrada de la interfaz
     # (le marca el ritmo al filtro). Su id es de Windows y distinto en cada PC.
@@ -281,7 +302,7 @@ if ($claveFLRuta -and $driverAsio) {
   elseif (Get-Process FL64 -ErrorAction SilentlyContinue) { Anotar 'FALTA' 'FL abierto: no toco su driver' "F10 > Audio > Dispositivo > $driverAsio" }
   elseif (-not $SoloComprobar) { Set-ItemProperty $claveFLRuta -Name 'Device name' -Value "1$driverAsio"; Anotar 'OK' 'Driver de FL fijado' $driverAsio }
 }
-Anotar 'AVISO' 'FL: entrada del micro' 'Master > entrada "In 1" en MONO y "Monitorear la entrada externa: Activo"'
+if ($flExe) { Anotar 'AVISO' 'FL: entrada del micro' 'Master > entrada "In 1" en MONO y "Monitorear la entrada externa: Activo"' }
 
 # ------------------------------------------------- 6. Accesos directos -----
 
