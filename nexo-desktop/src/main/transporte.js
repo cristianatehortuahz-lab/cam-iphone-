@@ -10,6 +10,7 @@
 const { EventEmitter } = require('events');
 const net = require('net');
 const usbmux = require('./usbmux');
+const android = require('./android');
 const proto = require('./protocolo');
 const clave = require('./clave');
 
@@ -190,6 +191,13 @@ async function conectarCable(deviceID, puerto) {
   return new Sesion(socket, { origen: 'cable', sobrante });
 }
 
+// Lo mismo para un movil Android: el tunel lo da adb (android.js). `serie` es
+// la que lista `adb devices`.
+async function conectarAndroid(serie, puerto) {
+  const socket = await android.conectar(serie, puerto);
+  return new Sesion(socket, { origen: 'cable' });
+}
+
 // Busca el primer iPhone conectado y se conecta a el.
 async function conectarPrimerCable(puerto) {
   const dispositivos = await usbmux.listarDispositivos();
@@ -216,4 +224,4 @@ function servidorWifi(puerto = 7677) {
   return emisor;
 }
 
-module.exports = { Sesion, conectarCable, conectarPrimerCable, servidorWifi, CAPACIDADES_PC };
+module.exports = { Sesion, conectarCable, conectarAndroid, conectarPrimerCable, servidorWifi, CAPACIDADES_PC };

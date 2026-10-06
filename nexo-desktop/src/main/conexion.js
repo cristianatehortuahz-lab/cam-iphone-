@@ -13,6 +13,7 @@
 
 const { EventEmitter } = require('events');
 const usbmux = require('./usbmux');
+const android = require('./android');
 const transporte = require('./transporte');
 const { Anunciante } = require('./descubrimiento');
 const { CABLE_IPHONE, WIFI } = require('./puertos');
@@ -79,9 +80,13 @@ class Conexion extends EventEmitter {
     this.sondeando = true;
     try {
       const dispositivos = await usbmux.listarDispositivos();
+      // Los Android por cable (adb). Nunca tumba el sondeo del iPhone: si adb
+      // falta o falla, es como si no hubiera ninguno.
+      const androides = await android.listarDispositivos().catch(() => []);
+      this.#avisarAndroidSinPermiso(androides);
 
       const habia = this.hayCable;
-      this.hayCable = dispositivos.length > 0;
+      this.hayCable = dispositivos.length > 0 || androides.some((a) => a.listo);
       if (habia !== this.hayCable) {
         this.#publicar(this.hayCable ? 'cable-detectado' : 'cable-quitado');
       }
@@ -117,6 +122,28 @@ class Conexion extends EventEmitter {
         ses.once('fin', soltar);
         this.#considerarSesion(ses, 'cable', id);
       }
+
+      // Y cada Android: es otra camara mas, con el mismo protocolo.
+      for (const movil of androides) {
+        if (!movil.listo) continue;
+        const id = 'cable-android-' + movil.serie;
+        if (this.sesiones.has(id) || this.conectando.has(id)) continue;
+
+        this.conectando.add(id);
+        let ses;
+        try {
+          ses = await transporte.conectarAndroid(movil.serie, CABLE_IPHONE);
+        } catch (e) {
+          this.conectando.delete(id);
+          continue;
+        }
+        const soltar = () => this.conectando.delete(id);
+        ses.once('listo', soltar);
+        ses.once('fin', soltar);
+        // Callada hasta que salude: adb acepta la conexion aunque Nexo Cam no
+        // este abierta en el movil y la corta al momento, cada 2 s.
+        this.#considerarSesion(ses, 'cable', id, { callada: true });
+      }
     } catch (e) {
       console.error('[nexo] sondeo cable:', e.message);
     } finally {
@@ -127,7 +154,19 @@ class Conexion extends EventEmitter {
   // Una conexion recien abierta todavia no es una sesion: solo lo sera cuando se
   // presente con un saludo valido (y, por WiFi, con la clave correcta). Asi una
   // conexion muda o ajena no ocupa el sitio de un iPhone de verdad.
-  #considerarSesion(nueva, origen, id) {
+  // Un Android enchufado que aun no ha aceptado este PC ("unauthorized") no
+  // sirve de nada y no da ninguna pista: se dice una vez por movil.
+  #avisarAndroidSinPermiso(androides) {
+    this.androidAvisados = this.androidAvisados || new Set();
+    for (const a of androides) {
+      if (a.listo) { this.androidAvisados.delete(a.serie); continue; }
+      if (this.androidAvisados.has(a.serie)) continue;
+      this.androidAvisados.add(a.serie);
+      console.log(`[nexo] Android ${a.serie} enchufado pero ${a.estado === 'unauthorized' ? 'sin aceptar este PC: mira el aviso de depuracion USB en el movil' : 'no responde (' + a.estado + ')'}`);
+    }
+  }
+
+  #considerarSesion(nueva, origen, id, { callada = false } = {}) {
     if (this.sesiones.has(id)) {
       // Ese dispositivo ya tiene sesion. Cerrarla de verdad: descartarla con un
       // `return` seco dejaba el socket abierto y el latido latiendo para siempre.
@@ -136,7 +175,10 @@ class Conexion extends EventEmitter {
     }
 
     nueva.on('rechazada', (e) => console.warn(`[nexo] conexion ${origen} rechazada: ${e.message}`));
-    nueva.on('error', (e) => console.error(`[nexo] sesion ${id}:`, e.message));
+    nueva.on('error', (e) => {
+      if (callada && !nueva.capacidadesMovil) return;
+      console.error(`[nexo] sesion ${id}:`, e.message);
+    });
 
     nueva.once('listo', (capacidades) => {
       if (this.sesiones.has(id)) return nueva.cerrar(); // gano otra carrera

@@ -1,0 +1,62 @@
+name: Compilar Nexo Cam (Android)
+
+# Compila la app de Android en los runners de GitHub, igual que la de iPhone.
+# Produce un .apk de depuracion que se instala directamente en el movil: en
+# Android no hay firma que caduque a los 7 dias.
+#
+# Se ejecuta al tocar nexo-android/, o a mano desde la pestana Actions.
+
+on:
+  push:
+    paths:
+      - 'nexo-android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+jobs:
+  compilar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # El repo no lleva el envoltorio de Gradle (es un binario): se instala la
+      # version que pide el plugin de Android.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compilar el .apk
+        working-directory: nexo-android
+        run: |
+          set -o pipefail
+          gradle --no-daemon assembleDebug 2>&1 | tee compilacion.log
+
+      # Los errores del compilador, como anotaciones de la ejecucion: asi se leen
+      # desde fuera (y por la API) sin tener que abrir el registro entero.
+      - name: Senalar los errores
+        if: failure()
+        working-directory: nexo-android
+        run: |
+          grep -E '^e: |^\* What went wrong|^> |error:' compilacion.log | head -40 | while IFS= read -r linea; do
+            echo "::error::${linea}"
+          done
+
+      - name: Renombrar
+        working-directory: nexo-android
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK" ]; then echo "No se genero el apk"; exit 1; fi
+          cp "$APK" Nexo-Cam-Android.apk
+          echo "APK creado: $(du -h Nexo-Cam-Android.apk | cut -f1)"
+
+      - name: Subir el .apk como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexo-Cam-Android-apk
+          path: nexo-android/Nexo-Cam-Android.apk
+          if-no-files-found: error

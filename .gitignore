@@ -21,6 +21,13 @@ out/
 DerivedData/
 *.xcarchive
 
+# --- Android ---
+# adb (platform-tools de Google) lo baja el instalador; no va en el repo.
+herramientas/platform-tools/
+.gradle/
+local.properties
+*.apk
+
 # --- Ajustes locales del usuario ---
 # config-pc.json: interfaz de audio y rutas de cada PC (lo escribe el instalador).
 config-pc.json
