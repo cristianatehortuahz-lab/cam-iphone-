@@ -38,6 +38,7 @@ let salidaAudioEstado = { encontrado: false, etiqueta: null };
 let camaraVirtual = null; // el video del iPhone como webcam de Windows (ver camara-virtual.js)
 let microIphone = null; // el micro del iPhone hacia el directo (ver micro-iphone.js)
 let microWindows = null; // un micro de otra interfaz hacia el DAW (ver micro-windows.js)
+let principalVista = null; // la camara principal en el ultimo cambio de conexion
 const grabador = new Grabador();
 let saliendoDeVerdad = false;
 
@@ -170,11 +171,27 @@ function porCable(id) {
   return Boolean(camara && camara.origen === 'cable');
 }
 
+// Como salen dos camaras por la webcam: 'apilada', 'recuadro' o null (solo la
+// principal). Los ajustes guardados antes de que existiera no lo traen.
+function composicion(conf) {
+  return conf.dos === undefined ? 'apilada' : conf.dos;
+}
+
+// La segunda camara de la composicion: la primera por cable que no es la
+// principal.
+function idSegunda() {
+  if (!conexion) return null;
+  for (const id of conexion.sesiones.keys()) {
+    if (id !== conexion.principal && porCable(id)) return id;
+  }
+  return null;
+}
+
 function iniciarCamaraVirtual() {
   const conf = ajustes.get('camaraVirtual');
   camaraVirtual = new CamaraVirtual({
     carpetaDatos: app.getPath('userData'),
-    opciones: { giro: conf.giro, espejo: conf.espejo, encuadre: conf.encuadre },
+    opciones: { giro: conf.giro, espejo: conf.espejo, encuadre: conf.encuadre, dos: composicion(conf) },
   });
   camaraVirtual.on('estado', () => {
     if (bandeja) refrescarMenuBandeja();
@@ -187,7 +204,7 @@ function iniciarCamaraVirtual() {
 function ajustarCamaraVirtual(cambios) {
   const conf = { ...ajustes.get('camaraVirtual'), ...cambios };
   ajustes.set('camaraVirtual', conf);
-  camaraVirtual.configurar({ giro: conf.giro, espejo: conf.espejo, encuadre: conf.encuadre });
+  camaraVirtual.configurar({ giro: conf.giro, espejo: conf.espejo, encuadre: conf.encuadre, dos: composicion(conf) });
   camaraVirtual.activar(conf.activa);
   if (bandeja) refrescarMenuBandeja();
   avisarDirecto();
@@ -289,8 +306,15 @@ async function iniciarConexionNativa() {
       grabador.escribir(v, id);
 
       // De aqui en adelante, solo la principal: es la que se ve y la que sale a
-      // OBS. Mandar las demas seria gastar IPC y ancho de banda para nada.
-      if (id !== conexion.principal) return;
+      // OBS. Mandar las demas seria gastar IPC y ancho de banda para nada. La
+      // unica excepcion es la webcam, que puede componer la principal con una
+      // segunda camara (iPhone + Android a la vez en TikTok).
+      if (id !== conexion.principal) {
+        if (camaraVirtual && camaraVirtual.activa && camaraVirtual.opciones.dos && id === idSegunda()) {
+          camaraVirtual.escribirSegunda({ datos: v.datos, clave: v.clave || protocolo.esFotogramaClave(v.datos) });
+        }
+        return;
+      }
 
       // El flag que manda el movil se queda corto: hay IDR que llegan marcadas
       // como delta. Lo confirmamos con el bitstream una sola vez aqui, y ese
@@ -340,9 +364,16 @@ async function iniciarConexionNativa() {
       servidor.avisarVisores({ tipo: 'nexo-sin-sesion' });
     }
     // La camara y el micro empiezan de cero con la sesion (o la camara) nueva.
+    // Si la que se fue era la segunda, la principal no se toca: sigue saliendo
+    // sin un corte, ya sola.
+    const cambioPrincipal = conexion.principal !== principalVista;
+    principalVista = conexion.principal;
     if (c.evento === 'sesion-cerrada' || c.evento === 'principal-cambiada') {
-      if (camaraVirtual) camaraVirtual.cortar();
-      if (microIphone) microIphone.cortar();
+      if (camaraVirtual) {
+        if (cambioPrincipal) camaraVirtual.cortar();
+        camaraVirtual.cortarSegunda();
+      }
+      if (microIphone && cambioPrincipal) microIphone.cortar();
     }
 
     // Refrescar el menu de bandeja si cambia el estado importante.

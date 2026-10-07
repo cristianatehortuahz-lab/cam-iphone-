@@ -26,6 +26,7 @@
 // aplicacion (medido con TikTok el 05/10/2026).
 
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
@@ -177,6 +178,54 @@ function planificar(origen, { giro = 0, espejo = false, encuadre = null } = {}) 
   return { ancho: w, alto: h, filtros: filtros.join(',') };
 }
 
+// Dos camaras en una sola imagen (la webcam de Windows es una: para que una
+// aplicacion vea las dos hay que componerlas aqui). Pedido el 05/10/2026 para
+// sacar a la vez el iPhone y un Android en TikTok.
+//
+//   'apilada'   una encima de otra, cada una entera, en un lienzo de 1080x1216.
+//   'recuadro'  la principal entera y la segunda en una esquina.
+//
+// El giro, el espejo y el encuadre siguen siendo de la principal.
+//
+// Manda la principal: sale un fotograma por cada uno suyo, con el ultimo que
+// haya de la segunda (overlay). Si la segunda se para, se queda su ultima
+// imagen en vez de detenerse todo.
+const COMPOSICIONES = ['apilada', 'recuadro'];
+
+function planificarDos(principal, segunda, opciones = {}) {
+  if (opciones.dos === 'recuadro') {
+    const base = planificar(principal, opciones);
+    const previos = base.filtros.replace(/,?format=nv12$/, '');
+    const pw = par(base.ancho * 0.3);
+    const margen = par(base.ancho * 0.02);
+    return {
+      ancho: base.ancho,
+      alto: base.alto,
+      complejo:
+        `[0:v]${previos || 'null'}[a];[1:v]scale=${pw}:-2:flags=bilinear[b];` +
+        `[a][b]overlay=W-w-${margen}:H-h-${margen}:eof_action=repeat,settb=1/1000,setpts=N,format=nv12[v]`,
+    };
+  }
+  // Apilada. Cada camara entera en su franja de 16:9, sin recortar (si no es
+  // 16:9 queda centrada con bandas). 1080x1216 y no la pantalla entera a
+  // proposito: en la escena vertical de TikTok caben debajo la ventana de Reaper
+  // y sus 608 px (tres franjas de 16:9 a 1080 de ancho son 1824 de 1920).
+  const W = 1080, franja = 608, H = franja * 2;
+  const previos = [];
+  if (opciones.giro === 90) previos.push('transpose=1');
+  else if (opciones.giro === 270) previos.push('transpose=2');
+  else if (opciones.giro === 180) previos.push('hflip', 'vflip');
+  if (opciones.espejo) previos.push('hflip');
+  const encajar = `scale=${W}:${franja}:force_original_aspect_ratio=decrease:flags=bilinear`;
+  return {
+    ancho: W,
+    alto: H,
+    complejo:
+      `[0:v]${[...previos, encajar].join(',')},pad=${W}:${H}:(ow-iw)/2:(${franja}-ih)/2[a];[1:v]${encajar}[b];` +
+      `[a][b]overlay=(W-w)/2:${franja}+(${franja}-h)/2:eof_action=repeat,settb=1/1000,setpts=N,format=nv12[v]`,
+  };
+}
+
 // --- La camara ------------------------------------------------------------------
 
 class CamaraVirtual extends EventEmitter {
@@ -188,8 +237,12 @@ class CamaraVirtual extends EventEmitter {
     this.exe = path.join(carpetaDatos, 'camvirtual.exe');
     this.copiaFuente = path.join(carpetaDatos, 'camvirtual.cs');
     this.serie = 0; // cada ayudante estrena tuberia: el anterior puede tardar en soltar la suya
-    this.opciones = { giro: 0, espejo: false, encuadre: null, ...opciones };
+    // dos: null (solo la principal), 'apilada' o 'recuadro' (ver planificarDos).
+    this.opciones = { giro: 0, espejo: false, encuadre: null, dos: null, ...opciones };
     this.registro = registro;
+    // La segunda camara, si hay composicion: lo mismo que se guarda de la
+    // principal (sps, origen, grupo), por separado.
+    this.segunda = { sps: null, origen: null, grupo: [], esperandoClave: true, tirados: 0 };
 
     this.activa = false;
     this.motivo = null;      // por que no esta saliendo, en palabras para el usuario
@@ -212,8 +265,10 @@ class CamaraVirtual extends EventEmitter {
     const a = this.ayudante;
     return {
       activa: this.activa,
-      enMarcha: Boolean(a && a.listo && this.ffmpeg),
+      enMarcha: Boolean(a && a.listo && this.ffmpeg && this.ffmpeg.proceso),
       tamano: a && a.listo ? a.lienzo : null,
+      // Si ahora mismo salen las dos camaras compuestas.
+      conSegunda: Boolean(this.ffmpeg && this.ffmpeg.proceso && this.ffmpeg.dos),
       motivo: this.motivo,
       ...this.opciones,
     };
@@ -260,7 +315,7 @@ class CamaraVirtual extends EventEmitter {
     else if (this.grupo.length && this.grupo.length < MAX_GRUPO) this.grupo.push(trozo);
 
     const f = this.ffmpeg;
-    if (!f || f.firma !== this.#firma()) return;
+    if (!f || !f.proceso || f.firma !== this.#firma()) return;
     if (this.esperandoClave) {
       if (!v.clave) return;
       this.esperandoClave = false;
@@ -273,6 +328,45 @@ class CamaraVirtual extends EventEmitter {
     f.proceso.stdin.write(trozo);
   }
 
+  // Cada fotograma de la SEGUNDA camara: { datos, clave }. Solo cuenta si hay
+  // una composicion elegida (opciones.dos).
+  escribirSegunda(v) {
+    if (!this.activa || !this.opciones.dos) return;
+    const s = this.segunda;
+
+    if (v.clave) {
+      const sps = extraerSps(v.datos);
+      if (sps && !(s.sps && sps.equals(s.sps))) {
+        try {
+          s.origen = tamanoDeSps(sps);
+          s.sps = Buffer.from(sps);
+          this.registro.log(`[camara] la segunda camara manda ${s.origen.ancho}x${s.origen.alto}`);
+          this.#asegurar();
+        } catch (e) {
+          this.registro.error('[camara] no entiendo el video de la segunda camara:', e.message);
+          return;
+        }
+      }
+    }
+
+    const trozo = Buffer.concat([v.datos, AUD]);
+    if (v.clave) s.grupo = [trozo];
+    else if (s.grupo.length && s.grupo.length < MAX_GRUPO) s.grupo.push(trozo);
+
+    const f = this.ffmpeg;
+    if (!f || !f.dos || !f.entradaDos || f.firma !== this.#firma()) return;
+    if (s.esperandoClave) {
+      if (!v.clave) return;
+      s.esperandoClave = false;
+    }
+    if (f.entradaDos.writableLength > MAX_COLA) {
+      s.esperandoClave = true;
+      this.tirados++;
+      return;
+    }
+    f.entradaDos.write(trozo);
+  }
+
   // La sesion con el iPhone se cerro. El ayudante sigue vivo y pone la camara
   // en negro a los 3 s; al volver el video se reengancha en la primera clave.
   cortar() {
@@ -282,6 +376,14 @@ class CamaraVirtual extends EventEmitter {
     this.#pararFfmpeg();
   }
 
+  // La segunda camara se fue (o dejo de ser la segunda): la principal sigue
+  // saliendo sola. #asegurar relanza ffmpeg sin composicion.
+  cortarSegunda() {
+    const habia = Boolean(this.segunda.origen);
+    this.segunda = { sps: null, origen: null, grupo: [], esperandoClave: true, tirados: 0 };
+    if (habia) this.#asegurar();
+  }
+
   detener() {
     this.activa = false;
     this.#apagar();
@@ -289,11 +391,16 @@ class CamaraVirtual extends EventEmitter {
 
   // --- interno ---
 
+  // Hay composicion cuando se ha elegido una y la segunda camara ya manda.
+  #dos() {
+    return Boolean(COMPOSICIONES.includes(this.opciones.dos) && this.segunda.origen);
+  }
+
   #firma() {
     const o = this.opciones;
-    return this.origen
-      ? `${this.origen.ancho}x${this.origen.alto}|${o.giro}|${o.espejo ? 1 : 0}|${o.encuadre || ''}`
-      : null;
+    if (!this.origen) return null;
+    const una = `${this.origen.ancho}x${this.origen.alto}|${o.giro}|${o.espejo ? 1 : 0}|${o.encuadre || ''}`;
+    return this.#dos() ? `${una}|${o.dos}|${this.segunda.origen.ancho}x${this.segunda.origen.alto}` : una;
   }
 
   #motivo(texto) {
@@ -317,18 +424,27 @@ class CamaraVirtual extends EventEmitter {
     const f = this.ffmpeg;
     this.ffmpeg = null;
     this.esperandoClave = true;
+    this.segunda.esperandoClave = true;
     if (!f) return;
-    f.proceso.removeAllListeners('exit');
-    // Primero matarlo: si viera cerrarse la entrada intentaria decodificar el
-    // delimitador suelto del final y lo dejaria en el registro como un error.
-    try { f.proceso.kill(); } catch { /* ya habia terminado */ }
-    try { f.proceso.stdin.destroy(); } catch { /* ya estaba cerrado */ }
+    if (f.proceso) {
+      f.proceso.removeAllListeners('exit');
+      // Primero matarlo: si viera cerrarse una entrada intentaria decodificar el
+      // delimitador suelto del final y lo dejaria en el registro como un error.
+      try { f.proceso.kill(); } catch { /* ya habia terminado */ }
+      try { f.proceso.stdin.destroy(); } catch { /* ya estaba cerrado */ }
+    }
+    // Y despues la tuberia de la segunda camara, si la habia.
+    try { if (f.entradaDos) f.entradaDos.destroy(); } catch { /* ya estaba cerrada */ }
+    try { if (f.servidor) f.servidor.close(); } catch { /* ya estaba cerrado */ }
   }
 
   #pararAyudante() {
     const a = this.ayudante;
     this.ayudante = null;
-    if (!a) return;
+    // Sin proceso todavia: se estaba compilando el ayudante. Con dos camaras el
+    // lienzo cambia nada mas llegar la segunda, a veces antes de que arranque
+    // (06/10/2026); #arrancarAyudante ya descarta el que no es el actual.
+    if (!a || !a.proceso) return;
     a.proceso.removeAllListeners('exit');
     // Cerrarle la entrada, no matarlo: asi marca la camara como parada y las
     // aplicaciones la sueltan. Matado, la dejaria congelada en el ultimo
@@ -351,7 +467,9 @@ class CamaraVirtual extends EventEmitter {
     const ffmpeg = buscarFfmpeg();
     if (!ffmpeg) return this.#motivo('falta ffmpeg: sin el no hay camara');
 
-    const plan = planificar(this.origen, this.opciones);
+    const plan = this.#dos()
+      ? planificarDos(this.origen, this.segunda.origen, this.opciones)
+      : planificar(this.origen, this.opciones);
     const lienzo = `${plan.ancho}x${plan.alto}`;
 
     if (this.ayudante && this.ayudante.lienzo !== lienzo) {
@@ -470,12 +588,66 @@ class CamaraVirtual extends EventEmitter {
     }
   }
 
+  // Dos camaras: la principal entra por la entrada estandar de ffmpeg y la
+  // segunda por una tuberia con nombre que se abre aqui. ffmpeg se lanza cuando
+  // la tuberia ya escucha; hasta entonces `proceso` es null.
+  #arrancarFfmpegDos(ffmpeg, plan, firma) {
+    const f = { proceso: null, firma, dos: true, entradaDos: null, servidor: null };
+    this.ffmpeg = f;
+    const tuberia = `\\\\.\\pipe\\nexo-cam2-${process.pid}-${++this.serie}`;
+    f.servidor = net.createServer((zocalo) => {
+      if (this.ffmpeg !== f) return zocalo.destroy();
+      zocalo.on('error', () => {});
+      f.entradaDos = zocalo;
+      // Como con la principal: lo que hay desde la ultima clave, de golpe.
+      this.segunda.esperandoClave = this.segunda.grupo.length === 0;
+      for (const trozo of this.segunda.grupo) zocalo.write(trozo);
+    });
+    f.servidor.on('error', (e) => {
+      if (this.ffmpeg !== f) return;
+      this.ffmpeg = null;
+      this.registro.error('[camara] tuberia de la segunda camara:', e.message);
+      this.#reintentar(2000);
+    });
+    f.servidor.listen(tuberia, () => {
+      if (this.ffmpeg !== f) return f.servidor.close();
+      const hilos = (o) => (o.ancho * o.alto > MAX_PIXELES ? '4' : '1');
+      // Marcas de tiempo del reloj: los dos flujos llegan sin ellas y cada movil
+      // va a su ritmo (30 y 60 fps). Con la hora de llegada, ffmpeg empareja cada
+      // fotograma de la principal con el mas reciente de la segunda; sin ellas
+      // contaria fotogramas y el mas rapido acumularia retraso sin fin.
+      const entrada = (origen, fuente) => [
+        '-flags', 'low_delay',
+        '-probesize', '32', '-analyzeduration', '1', '-fpsprobesize', '0',
+        '-use_wallclock_as_timestamps', '1',
+        '-threads', hilos(origen),
+        '-f', 'h264', '-i', fuente,
+      ];
+      this.#lanzar(f, ffmpeg, [
+        '-hide_banner', '-loglevel', 'error',
+        ...entrada(this.origen, 'pipe:0'),
+        ...entrada(this.segunda.origen, tuberia),
+        '-an', '-filter_complex', plan.complejo, '-map', '[v]',
+        // Con la hora del reloj como marca de tiempo, la base de tiempos por
+        // defecto de la salida (1/25 s) junta varios fotogramas en la misma
+        // marca y ffmpeg llena el registro de avisos de "dts". Con la del
+        // origen (microsegundos) cada uno tiene la suya.
+        '-fps_mode', 'passthrough', '-enc_time_base', 'demux',
+        '-f', 'rawvideo', '-y', `\\\\.\\pipe\\${this.ayudante.tuberia}`,
+      ]);
+      this.registro.log(`[camara] dos camaras en una (${this.opciones.dos})`);
+    });
+  }
+
   #arrancarFfmpeg(ffmpeg, plan, firma) {
+    if (plan.complejo) return this.#arrancarFfmpegDos(ffmpeg, plan, firma);
     // Un solo hilo mientras la imagen sea de hasta 1080p: los hilos por
     // fotograma de ffmpeg retrasan la salida un fotograma por hilo (7 hilos,
     // 233 ms a 30 fps). Por encima no da abasto con uno y se acepta el retraso.
     const hilos = this.origen.ancho * this.origen.alto > MAX_PIXELES ? '4' : '1';
-    const p = spawn(ffmpeg, [
+    const f = { proceso: null, firma };
+    this.ffmpeg = f;
+    this.#lanzar(f, ffmpeg, [
       '-hide_banner', '-loglevel', 'error',
       // Arranque sin analizar el flujo: por defecto ffmpeg lee varios segundos
       // antes de dar el primer fotograma. Ojo con dos opciones que parecen
@@ -491,9 +663,12 @@ class CamaraVirtual extends EventEmitter {
       // el tiempo: el ritmo ya lo marca el iPhone.
       '-fps_mode', 'passthrough',
       '-f', 'rawvideo', '-y', `\\\\.\\pipe\\${this.ayudante.tuberia}`,
-    ], { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
-    const f = { proceso: p, firma };
-    this.ffmpeg = f;
+    ]);
+  }
+
+  #lanzar(f, ffmpeg, argumentos) {
+    const p = spawn(ffmpeg, argumentos, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
+    f.proceso = p;
     p.stdin.on('error', () => {});
     // Lo que ya se tenia desde la ultima clave: la imagen sale sin esperar.
     this.esperandoClave = this.grupo.length === 0;
@@ -510,8 +685,7 @@ class CamaraVirtual extends EventEmitter {
     });
     p.on('exit', () => {
       if (this.ffmpeg !== f) return;
-      this.ffmpeg = null;
-      this.esperandoClave = true;
+      this.#pararFfmpeg(); // suelta tambien la tuberia de la segunda camara
       this.#reintentar(500);
       this.emit('estado', this.estado());
     });
@@ -519,4 +693,4 @@ class CamaraVirtual extends EventEmitter {
   }
 }
 
-module.exports = { CamaraVirtual, planificar, extraerSps, tamanoDeSps, ENCUADRES };
+module.exports = { CamaraVirtual, planificar, planificarDos, extraerSps, tamanoDeSps, ENCUADRES, COMPOSICIONES };
