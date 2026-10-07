@@ -297,6 +297,17 @@ if ($UsaReaper) {
       if (Get-Process voicemeeterpro -ErrorAction SilentlyContinue) { Anotar 'OK' 'VoiceMeeter abierto (junta las dos interfaces)' }
       else { Anotar 'FALLO' 'VoiceMeeter no se abrio' $vmExe }
     }
+    # Y montado: VoiceMeeter solo guarda su configuracion al cerrarse bien, y
+    # tras un reinicio del PC arranco en blanco con Reaper mandando silencio
+    # (06/10/2026). Si ya esta como debe, no toca nada.
+    if (-not $SoloComprobar -and (Get-Process voicemeeterpro -ErrorAction SilentlyContinue)) {
+      try {
+        $montaje = & (Join-Path $PSScriptRoot 'voicemeeter.ps1') -Montar -Principal $EntradaInterfaz 6>&1 | Out-String
+        Anotar 'OK' 'VoiceMeeter con las dos interfaces' (($montaje -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1).Trim())
+      } catch {
+        Anotar 'FALLO' 'VoiceMeeter no quedo montado' $_.Exception.Message
+      }
+    }
   }
 } else {
   Paso 'Audio de FL Studio'
