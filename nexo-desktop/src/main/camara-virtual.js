@@ -145,9 +145,34 @@ function tamanoDeSps(nal) {
 
 // --- Que sale por la camara ---------------------------------------------------
 
+// Lleva una entrada a w x h. En la tarjeta grafica, y de ahi a la memoria del
+// PC; o por CPU.
+const escalar = (w, h, enGpu) => (enGpu
+  ? `scale_cuda=${w}:${h}:format=nv12:interp_algo=lanczos,hwdownload,format=nv12`
+  : `scale=${w}:${h}:flags=bilinear`);
+
 // De la imagen que llega y las opciones, el tamano de la camara y los filtros
 // de ffmpeg que la producen.
-function planificar(origen, { giro = 0, espejo = false, encuadre = null } = {}) {
+//
+// enGpu: la entrada se decodifica en la tarjeta grafica (ver #enGpu). Entonces
+// el encogido hasta el tope tambien se hace alli, con Lanczos, y a la memoria
+// del PC ya baja la imagen pequena: lo caro de un 4K no es decodificarlo sino
+// reducirlo (medido el 06/10/2026 con 4K a 60 fps: 122 fotogramas/s todo por
+// CPU, 425 con decodificacion y escalado en una RTX 5060).
+function planificar(origen, opciones = {}, enGpu = false) {
+  if (enGpu) {
+    let { ancho, alto } = origen;
+    let previo = 'hwdownload,format=nv12';
+    if (ancho * alto > MAX_PIXELES) {
+      const k = Math.sqrt(MAX_PIXELES / (ancho * alto));
+      ancho = par(ancho * k);
+      alto = par(alto * k);
+      previo = `${escalar(ancho, alto, true)}`;
+    }
+    const p = planificar({ ancho, alto }, opciones);
+    return { ancho: p.ancho, alto: p.alto, filtros: `${previo},${p.filtros}` };
+  }
+  const { giro = 0, espejo = false, encuadre = null } = opciones;
   const filtros = [];
   let { ancho, alto } = origen;
   if (giro === 90) filtros.push('transpose=1');
@@ -192,17 +217,19 @@ function planificar(origen, { giro = 0, espejo = false, encuadre = null } = {}) 
 // imagen en vez de detenerse todo.
 const COMPOSICIONES = ['apilada', 'recuadro'];
 
-function planificarDos(principal, segunda, opciones = {}) {
+// gpu: { uno, dos } dice que entradas se decodifican en la tarjeta grafica.
+function planificarDos(principal, segunda, opciones = {}, gpu = {}) {
   if (opciones.dos === 'recuadro') {
-    const base = planificar(principal, opciones);
+    const base = planificar(principal, opciones, gpu.uno);
     const previos = base.filtros.replace(/,?format=nv12$/, '');
     const pw = par(base.ancho * 0.3);
+    const ph = par((pw * segunda.alto) / segunda.ancho);
     const margen = par(base.ancho * 0.02);
     return {
       ancho: base.ancho,
       alto: base.alto,
       complejo:
-        `[0:v]${previos || 'null'}[a];[1:v]scale=${pw}:-2:flags=bilinear[b];` +
+        `[0:v]${previos || 'null'}[a];[1:v]${escalar(pw, ph, gpu.dos)}[b];` +
         `[a][b]overlay=W-w-${margen}:H-h-${margen}:eof_action=repeat,settb=1/1000,setpts=N,format=nv12[v]`,
     };
   }
@@ -211,18 +238,33 @@ function planificarDos(principal, segunda, opciones = {}) {
   // proposito: en la escena vertical de TikTok caben debajo la ventana de Reaper
   // y sus 608 px (tres franjas de 16:9 a 1080 de ancho son 1824 de 1920).
   const W = 1080, franja = 608, H = franja * 2;
-  const previos = [];
-  if (opciones.giro === 90) previos.push('transpose=1');
-  else if (opciones.giro === 270) previos.push('transpose=2');
-  else if (opciones.giro === 180) previos.push('hflip', 'vflip');
-  if (opciones.espejo) previos.push('hflip');
-  const encajar = `scale=${W}:${franja}:force_original_aspect_ratio=decrease:flags=bilinear`;
+  const girada = opciones.giro === 90 || opciones.giro === 270;
+  const giros = [];
+  if (opciones.giro === 90) giros.push('transpose=1');
+  else if (opciones.giro === 270) giros.push('transpose=2');
+  else if (opciones.giro === 180) giros.push('hflip', 'vflip');
+  if (opciones.espejo) giros.push('hflip');
+
+  // El tamano con el que cada camara cabe entera en su franja. Se calcula aqui
+  // (y no con force_original_aspect_ratio) porque el escalado de la tarjeta
+  // grafica pide las medidas exactas; y se escala ANTES de girar, que es cuando
+  // la imagen puede estar aun en la tarjeta.
+  const encajar = (o, gira) => {
+    const [aw, ah] = gira ? [o.alto, o.ancho] : [o.ancho, o.alto];
+    const k = Math.min(W / aw, franja / ah);
+    const w = Math.min(W, par(aw * k)), h = Math.min(franja, par(ah * k));
+    return { w, h, previo: gira ? [h, w] : [w, h] };
+  };
+  const a = encajar(principal, girada);
+  const b = encajar(segunda, false);
   return {
     ancho: W,
     alto: H,
     complejo:
-      `[0:v]${[...previos, encajar].join(',')},pad=${W}:${H}:(ow-iw)/2:(${franja}-ih)/2[a];[1:v]${encajar}[b];` +
-      `[a][b]overlay=(W-w)/2:${franja}+(${franja}-h)/2:eof_action=repeat,settb=1/1000,setpts=N,format=nv12[v]`,
+      `[0:v]${[escalar(a.previo[0], a.previo[1], gpu.uno), ...giros].join(',')},` +
+      `pad=${W}:${H}:${(W - a.w) / 2}:${(franja - a.h) / 2}[a];` +
+      `[1:v]${escalar(b.w, b.h, gpu.dos)}[b];` +
+      `[a][b]overlay=${(W - b.w) / 2}:${franja + (franja - b.h) / 2}:eof_action=repeat,settb=1/1000,setpts=N,format=nv12[v]`,
   };
 }
 
@@ -396,10 +438,40 @@ class CamaraVirtual extends EventEmitter {
     return Boolean(COMPOSICIONES.includes(this.opciones.dos) && this.segunda.origen);
   }
 
+  // Esa entrada se decodifica (y se encoge) en la tarjeta grafica. Solo las que
+  // pasan de 1080p: hasta ahi un hilo de CPU va sobrado y es el camino mas
+  // probado y de menos retraso.
+  #enGpu(origen) {
+    return Boolean(this.gpu && origen && origen.ancho * origen.alto > MAX_PIXELES);
+  }
+
+  // ¿Sabe este PC decodificar y escalar en la tarjeta grafica (NVIDIA, CUDA)? Se
+  // pregunta una vez, probandolo de verdad con un fotograma: que ffmpeg lo liste
+  // no dice que el driver este. En un PC sin ella todo sigue por CPU.
+  #sondearGpu(ffmpeg) {
+    if (this.sondeandoGpu) return;
+    this.sondeandoGpu = true;
+    const fin = (vale) => {
+      if (this.gpu !== undefined) return;
+      this.gpu = vale;
+      this.registro.log(`[camara] tarjeta grafica para el video 4K: ${vale ? 'si (NVIDIA)' : 'no, por CPU'}`);
+      this.#asegurar();
+    };
+    if (this.opciones.gpu === false || process.env.NEXO_SIN_GPU) return fin(false);
+    const p = spawn(ffmpeg, [
+      '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=s=128x128:d=0.2',
+      '-vf', 'format=nv12,hwupload_cuda,scale_cuda=64:64,hwdownload,format=nv12',
+      '-frames:v', '1', '-f', 'null', '-',
+    ], { stdio: 'ignore', windowsHide: true });
+    const plazo = setTimeout(() => { try { p.kill(); } catch { /* ya habia terminado */ } fin(false); }, 15000);
+    p.on('error', () => { clearTimeout(plazo); fin(false); });
+    p.on('exit', (codigo) => { clearTimeout(plazo); fin(codigo === 0); });
+  }
+
   #firma() {
     const o = this.opciones;
     if (!this.origen) return null;
-    const una = `${this.origen.ancho}x${this.origen.alto}|${o.giro}|${o.espejo ? 1 : 0}|${o.encuadre || ''}`;
+    const una = `${this.origen.ancho}x${this.origen.alto}|${o.giro}|${o.espejo ? 1 : 0}|${o.encuadre || ''}|${this.gpu ? 'g' : 'c'}`;
     return this.#dos() ? `${una}|${o.dos}|${this.segunda.origen.ancho}x${this.segunda.origen.alto}` : una;
   }
 
@@ -467,9 +539,12 @@ class CamaraVirtual extends EventEmitter {
     const ffmpeg = buscarFfmpeg();
     if (!ffmpeg) return this.#motivo('falta ffmpeg: sin el no hay camara');
 
+    if (this.gpu === undefined) return this.#sondearGpu(ffmpeg);
+
     const plan = this.#dos()
-      ? planificarDos(this.origen, this.segunda.origen, this.opciones)
-      : planificar(this.origen, this.opciones);
+      ? planificarDos(this.origen, this.segunda.origen, this.opciones,
+        { uno: this.#enGpu(this.origen), dos: this.#enGpu(this.segunda.origen) })
+      : planificar(this.origen, this.opciones, this.#enGpu(this.origen));
     const lienzo = `${plan.ancho}x${plan.alto}`;
 
     if (this.ayudante && this.ayudante.lienzo !== lienzo) {
@@ -611,7 +686,7 @@ class CamaraVirtual extends EventEmitter {
     });
     f.servidor.listen(tuberia, () => {
       if (this.ffmpeg !== f) return f.servidor.close();
-      const hilos = (o) => (o.ancho * o.alto > MAX_PIXELES ? '4' : '1');
+      const decodificador = (o) => this.#decodificador(o);
       // Marcas de tiempo del reloj: los dos flujos llegan sin ellas y cada movil
       // va a su ritmo (30 y 60 fps). Con la hora de llegada, ffmpeg empareja cada
       // fotograma de la principal con el mas reciente de la segunda; sin ellas
@@ -620,7 +695,7 @@ class CamaraVirtual extends EventEmitter {
         '-flags', 'low_delay',
         '-probesize', '32', '-analyzeduration', '1', '-fpsprobesize', '0',
         '-use_wallclock_as_timestamps', '1',
-        '-threads', hilos(origen),
+        ...decodificador(origen),
         '-f', 'h264', '-i', fuente,
       ];
       this.#lanzar(f, ffmpeg, [
@@ -639,12 +714,19 @@ class CamaraVirtual extends EventEmitter {
     });
   }
 
+  // Con que decodifica ffmpeg una entrada.
+  //
+  // Hasta 1080p, un solo hilo de CPU: los hilos por fotograma de ffmpeg
+  // retrasan la salida un fotograma por hilo (7 hilos, 233 ms a 30 fps). Por
+  // encima, la tarjeta grafica si la hay (y la imagen se queda alli hasta
+  // encogerla); si no, cuatro hilos, aceptando el retraso.
+  #decodificador(origen) {
+    if (this.#enGpu(origen)) return ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda'];
+    return ['-threads', origen.ancho * origen.alto > MAX_PIXELES ? '4' : '1'];
+  }
+
   #arrancarFfmpeg(ffmpeg, plan, firma) {
     if (plan.complejo) return this.#arrancarFfmpegDos(ffmpeg, plan, firma);
-    // Un solo hilo mientras la imagen sea de hasta 1080p: los hilos por
-    // fotograma de ffmpeg retrasan la salida un fotograma por hilo (7 hilos,
-    // 233 ms a 30 fps). Por encima no da abasto con uno y se acepta el retraso.
-    const hilos = this.origen.ancho * this.origen.alto > MAX_PIXELES ? '4' : '1';
     const f = { proceso: null, firma };
     this.ffmpeg = f;
     this.#lanzar(f, ffmpeg, [
@@ -656,7 +738,7 @@ class CamaraVirtual extends EventEmitter {
       // "-analyzeduration 0" significa "el valor por defecto", 5 s.
       '-flags', 'low_delay',
       '-probesize', '32', '-analyzeduration', '1', '-fpsprobesize', '0',
-      '-threads', hilos,
+      ...this.#decodificador(this.origen),
       '-f', 'h264', '-i', 'pipe:0',
       '-an', '-vf', plan.filtros,
       // Cada fotograma sale segun se decodifica, sin que ffmpeg lo reparta en

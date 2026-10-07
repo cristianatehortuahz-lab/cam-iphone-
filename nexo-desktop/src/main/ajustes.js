@@ -19,7 +19,10 @@ const POR_DEFECTO = {
   // giro: 0, 90, 180 o 270. encuadre: null (completo), '1:1', '9:16', '4:5' o '16:9'.
   // dos: como salen dos camaras a la vez, 'apilada' (una sobre otra), 'recuadro'
   // (la segunda en una esquina) o null (solo la principal).
-  camaraVirtual: { activa: true, giro: 0, espejo: false, encuadre: null, dos: 'apilada' },
+  // segundaAlMaximo: pedirle a la segunda camara su mejor resolucion al conectar
+  // (el estudio solo gobierna la principal). Apagado por defecto: en un PC sin
+  // tarjeta grafica, dos 4K a la vez no caben.
+  camaraVirtual: { activa: true, giro: 0, espejo: false, encuadre: null, dos: 'apilada', segundaAlMaximo: false },
   // El micro del iPhone mezclado en el audio del directo (micro-iphone.js).
   // Apagado por defecto: tambien recoge la voz sin Auto-Tune. nivel en %.
   microIphone: { activo: false, nivel: 100 },

@@ -106,6 +106,18 @@ function estadoNexo() {
       resolucionReal: movil.resolucionReal || null,
       fps: movil.fps || null,
     },
+    // Todas las camaras conectadas, no solo la principal: que da cada una y que
+    // podria dar. Para comprobar un montaje de dos camaras sin abrir el estudio.
+    camaras: conexion
+      ? conexion.camaras().map((c) => ({
+        id: c.id,
+        principal: c.principal,
+        modelo: (c.capacidades && c.capacidades.modelo) || null,
+        resolucion: (c.estadoMovil && c.estadoMovil.resolucionReal) || null,
+        fps: (c.estadoMovil && c.estadoMovil.fps) || null,
+        formatos: ((c.estadoMovil && c.estadoMovil.formatos) || []).map((f) => `${f.largo}x${f.corto}@${f.fpsMax}`),
+      }))
+      : [],
     audioFL: { puente: Boolean(puenteAudio), llega: audioFLLlega },
     camaraVirtual: camaraVirtual ? camaraVirtual.estado() : null,
     microIphone: microIphone ? microIphone.estado() : null,
@@ -185,6 +197,25 @@ function idSegunda() {
     if (id !== conexion.principal && porCable(id)) return id;
   }
   return null;
+}
+
+// El estudio solo gobierna la camara principal, asi que la segunda se quedaba
+// con la calidad con la que arranca su app (1080p en Android). Con
+// `segundaAlMaximo` se le pide su mejor formato en cuanto dice cuales tiene. Una
+// vez por conexion: si el movil no lo da, no se insiste.
+const pedidoMaximo = new Map(); // id de camara -> lo que ya se le pidio
+
+function segundaAlMaximo(id, estado) {
+  const conf = ajustes.get('camaraVirtual');
+  if (!conf.segundaAlMaximo || !estado || !porCable(id)) return;
+  const mejor = (estado.formatos || []).slice().sort((a, b) => b.largo - a.largo)[0];
+  if (!mejor) return;
+  const quiero = `${mejor.largo}x${mejor.corto}`;
+  const tiene = estado.resolucion;
+  if (tiene === quiero || tiene === `${mejor.corto}x${mejor.largo}` || pedidoMaximo.get(id) === quiero) return;
+  pedidoMaximo.set(id, quiero);
+  console.log(`[nexo] segunda camara (${id}) a su mejor calidad: ${quiero}`);
+  conexion.enviarControl({ accion: 'cambiar-resolucion', valor: quiero }, id);
 }
 
 function iniciarCamaraVirtual() {
@@ -368,6 +399,10 @@ async function iniciarConexionNativa() {
     // sin un corte, ya sola.
     const cambioPrincipal = conexion.principal !== principalVista;
     principalVista = conexion.principal;
+    if (c.evento === 'sesion-cerrada' && c.datos) pedidoMaximo.delete(c.datos.id);
+    if (c.evento === 'estado-movil' && c.datos && c.datos.id !== conexion.principal) {
+      segundaAlMaximo(c.datos.id, c.datos.estado);
+    }
     if (c.evento === 'sesion-cerrada' || c.evento === 'principal-cambiada') {
       if (camaraVirtual) {
         if (cambioPrincipal) camaraVirtual.cortar();

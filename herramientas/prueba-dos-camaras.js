@@ -94,7 +94,8 @@ async function esperarA(condicion, ms) {
   comprobar('plan recuadro: el tamano de la principal', p2.ancho === 1280 && p2.alto === 720, `${p2.ancho}x${p2.alto}`);
 
   const roja = fabricar('red', 1280, 720, 30, 4);
-  const azul = fabricar('blue', 1920, 1080, 60, 4);
+  // La segunda en 4K a 60, como un iPhone a tope: es el caso que mas pesa.
+  const azul = fabricar('blue', 3840, 2160, 60, 4);
 
   const lineas = [];
   const registro = { log: (...a) => lineas.push(a.join(' ')), error: (...a) => lineas.push('ERROR ' + a.join(' ')) };
