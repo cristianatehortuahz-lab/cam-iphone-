@@ -26,7 +26,6 @@
 // aplicacion (medido con TikTok el 05/10/2026).
 
 const fs = require('fs');
-const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
@@ -213,24 +212,37 @@ function planificar(origen, opciones = {}, enGpu = false) {
 // El giro, el espejo y el encuadre siguen siendo de la principal.
 //
 // Manda la principal: sale un fotograma por cada uno suyo, con el ultimo que
-// haya de la segunda (overlay). Si la segunda se para, se queda su ultima
-// imagen en vez de detenerse todo.
+// haya de la segunda. Si la segunda se para, se queda su ultima imagen en vez
+// de detenerse todo.
+//
+// Cada camara tiene su propio ffmpeg, que la decodifica y la deja ya al tamano
+// de su hueco, y las dos imagenes se juntan aqui (ver #arrancarFfmpegDos). La
+// primera version las juntaba un solo ffmpeg con `overlay`, y para saber que
+// fotograma de la segunda tocaba esperaba al siguiente: un tropiezo de una
+// camara frenaba tambien a la otra (06/10/2026, dos moviles en 4K a 24 fps:
+// huecos de 140-170 ms en la salida con el PC al 2 % de CPU).
 const COMPOSICIONES = ['apilada', 'recuadro'];
 
 // gpu: { uno, dos } dice que entradas se decodifican en la tarjeta grafica.
+//
+// Devuelve el lienzo y, por camara, los filtros de ffmpeg que la dejan a su
+// tamano y donde va: { ancho, alto, uno: {filtros, w, h, x, y}, dos: {...} }.
+// Posiciones y tamanos pares: en NV12 el color va cada dos pixeles.
 function planificarDos(principal, segunda, opciones = {}, gpu = {}) {
+  const abajo = (n) => Math.floor(n / 2) * 2;
   if (opciones.dos === 'recuadro') {
     const base = planificar(principal, opciones, gpu.uno);
-    const previos = base.filtros.replace(/,?format=nv12$/, '');
     const pw = par(base.ancho * 0.3);
     const ph = par((pw * segunda.alto) / segunda.ancho);
     const margen = par(base.ancho * 0.02);
     return {
       ancho: base.ancho,
       alto: base.alto,
-      complejo:
-        `[0:v]${previos || 'null'}[a];[1:v]${escalar(pw, ph, gpu.dos)}[b];` +
-        `[a][b]overlay=W-w-${margen}:H-h-${margen}:eof_action=repeat,settb=1/1000,setpts=N,format=nv12[v]`,
+      uno: { filtros: base.filtros, w: base.ancho, h: base.alto, x: 0, y: 0 },
+      dos: {
+        filtros: `${escalar(pw, ph, gpu.dos)},format=nv12`,
+        w: pw, h: ph, x: abajo(base.ancho - pw - margen), y: abajo(base.alto - ph - margen),
+      },
     };
   }
   // Apilada. Cada camara entera en su franja de 16:9, sin recortar (si no es
@@ -245,10 +257,8 @@ function planificarDos(principal, segunda, opciones = {}, gpu = {}) {
   else if (opciones.giro === 180) giros.push('hflip', 'vflip');
   if (opciones.espejo) giros.push('hflip');
 
-  // El tamano con el que cada camara cabe entera en su franja. Se calcula aqui
-  // (y no con force_original_aspect_ratio) porque el escalado de la tarjeta
-  // grafica pide las medidas exactas; y se escala ANTES de girar, que es cuando
-  // la imagen puede estar aun en la tarjeta.
+  // El tamano con el que cada camara cabe entera en su franja. Se escala ANTES
+  // de girar, que es cuando la imagen puede estar aun en la tarjeta grafica.
   const encajar = (o, gira) => {
     const [aw, ah] = gira ? [o.alto, o.ancho] : [o.ancho, o.alto];
     const k = Math.min(W / aw, franja / ah);
@@ -260,11 +270,46 @@ function planificarDos(principal, segunda, opciones = {}, gpu = {}) {
   return {
     ancho: W,
     alto: H,
-    complejo:
-      `[0:v]${[escalar(a.previo[0], a.previo[1], gpu.uno), ...giros].join(',')},` +
-      `pad=${W}:${H}:${(W - a.w) / 2}:${(franja - a.h) / 2}[a];` +
-      `[1:v]${escalar(b.w, b.h, gpu.dos)}[b];` +
-      `[a][b]overlay=${(W - b.w) / 2}:${franja + (franja - b.h) / 2}:eof_action=repeat,settb=1/1000,setpts=N,format=nv12[v]`,
+    uno: {
+      filtros: [escalar(a.previo[0], a.previo[1], gpu.uno), ...giros, 'format=nv12'].join(','),
+      w: a.w, h: a.h, x: abajo((W - a.w) / 2), y: abajo((franja - a.h) / 2),
+    },
+    dos: {
+      filtros: `${escalar(b.w, b.h, gpu.dos)},format=nv12`,
+      w: b.w, h: b.h, x: abajo((W - b.w) / 2), y: franja + abajo((franja - b.h) / 2),
+    },
+  };
+}
+
+// Pega una imagen NV12 de w x h en un lienzo NV12 de W x H, en (x, y).
+function pegar(lienzo, W, H, img, w, h, x, y) {
+  if (x === 0 && w === W) {
+    img.copy(lienzo, y * W, 0, w * h);
+    img.copy(lienzo, W * H + (y / 2) * W, w * h, w * h + (w * h) / 2);
+    return;
+  }
+  for (let f = 0; f < h; f++) img.copy(lienzo, (y + f) * W + x, f * w, f * w + w);
+  for (let f = 0; f < h / 2; f++) img.copy(lienzo, W * H + (y / 2 + f) * W + x, w * h + f * w, w * h + f * w + w);
+}
+
+// Parte un flujo de video en crudo en fotogramas de `tamano` bytes y entrega
+// cada uno completo (un Buffer propio, que el que lo recibe puede quedarse).
+function porFotogramas(tamano, alFotograma) {
+  let actual = Buffer.allocUnsafe(tamano);
+  let lleno = 0;
+  return (trozo) => {
+    let i = 0;
+    while (i < trozo.length) {
+      const n = Math.min(tamano - lleno, trozo.length - i);
+      trozo.copy(actual, lleno, i, i + n);
+      lleno += n;
+      i += n;
+      if (lleno === tamano) {
+        alFotograma(actual);
+        actual = Buffer.allocUnsafe(tamano);
+        lleno = 0;
+      }
+    }
   };
 }
 
@@ -321,8 +366,13 @@ class CamaraVirtual extends EventEmitter {
     if (activa === this.activa) return;
     this.activa = activa;
     this.#motivo(null);
-    if (activa) this.#asegurar();
-    else this.#apagar();
+    if (activa) {
+      // La consulta a la tarjeta grafica, ya: tarda cerca de un segundo y, hecha
+      // al llegar el primer fotograma, retrasaba el arranque de la imagen.
+      const ffmpeg = buscarFfmpeg();
+      if (ffmpeg && this.gpu === undefined) this.#sondearGpu(ffmpeg);
+      this.#asegurar();
+    } else this.#apagar();
   }
 
   // Giro (0, 90, 180, 270), espejo y encuadre ('1:1', '9:16'... o null = completo).
@@ -505,9 +555,18 @@ class CamaraVirtual extends EventEmitter {
       try { f.proceso.kill(); } catch { /* ya habia terminado */ }
       try { f.proceso.stdin.destroy(); } catch { /* ya estaba cerrado */ }
     }
-    // Y despues la tuberia de la segunda camara, si la habia.
-    try { if (f.entradaDos) f.entradaDos.destroy(); } catch { /* ya estaba cerrada */ }
-    try { if (f.servidor) f.servidor.close(); } catch { /* ya estaba cerrado */ }
+    // Con dos camaras: el ffmpeg de la segunda y la tuberia hacia el ayudante.
+    if (f.procesoDos) {
+      f.procesoDos.removeAllListeners('exit');
+      try { f.procesoDos.kill(); } catch { /* ya habia terminado */ }
+      try { f.procesoDos.stdin.destroy(); } catch { /* ya estaba cerrado */ }
+    }
+    if (f.salida) {
+      f.salida.removeAllListeners('close');
+      f.salida.removeAllListeners('error');
+      f.salida.on('error', () => {});
+      try { f.salida.destroy(); } catch { /* ya estaba cerrada */ }
+    }
   }
 
   #pararAyudante() {
@@ -539,7 +598,9 @@ class CamaraVirtual extends EventEmitter {
     const ffmpeg = buscarFfmpeg();
     if (!ffmpeg) return this.#motivo('falta ffmpeg: sin el no hay camara');
 
-    if (this.gpu === undefined) return this.#sondearGpu(ffmpeg);
+    // La consulta a la tarjeta grafica corre a la vez que arranca el ayudante:
+    // el tamano del lienzo no depende de ella, solo los filtros de ffmpeg.
+    if (this.gpu === undefined) this.#sondearGpu(ffmpeg);
 
     const plan = this.#dos()
       ? planificarDos(this.origen, this.segunda.origen, this.opciones,
@@ -559,6 +620,7 @@ class CamaraVirtual extends EventEmitter {
     }
     if (!this.ayudante) return this.#arrancarAyudante(plan, lienzo);
     if (!this.ayudante.listo) return;
+    if (this.gpu === undefined) return; // #sondearGpu vuelve a llamar aqui al acabar
 
     const firma = this.#firma();
     if (this.ffmpeg && this.ffmpeg.firma !== firma) this.#pararFfmpeg();
@@ -663,55 +725,87 @@ class CamaraVirtual extends EventEmitter {
     }
   }
 
-  // Dos camaras: la principal entra por la entrada estandar de ffmpeg y la
-  // segunda por una tuberia con nombre que se abre aqui. ffmpeg se lanza cuando
-  // la tuberia ya escucha; hasta entonces `proceso` es null.
+  // Dos camaras: un ffmpeg por cada una, que la deja en crudo y a su tamano, y
+  // aqui se pega cada imagen en su sitio del lienzo. Sale un lienzo por cada
+  // fotograma de la principal, con lo ultimo que haya llegado de la segunda:
+  // ninguna espera a la otra.
   #arrancarFfmpegDos(ffmpeg, plan, firma) {
-    const f = { proceso: null, firma, dos: true, entradaDos: null, servidor: null };
+    const { ancho: W, alto: H, uno, dos } = plan;
+    // Negro en NV12: luz 16, color 128.
+    const lienzo = Buffer.alloc(W * H * 1.5, 128);
+    lienzo.fill(16, 0, W * H);
+    const f = { proceso: null, procesoDos: null, entradaDos: null, salida: null, firma, dos: true, ultimaDos: null };
     this.ffmpeg = f;
-    const tuberia = `\\\\.\\pipe\\nexo-cam2-${process.pid}-${++this.serie}`;
-    f.servidor = net.createServer((zocalo) => {
-      if (this.ffmpeg !== f) return zocalo.destroy();
-      zocalo.on('error', () => {});
-      f.entradaDos = zocalo;
-      // Como con la principal: lo que hay desde la ultima clave, de golpe.
-      this.segunda.esperandoClave = this.segunda.grupo.length === 0;
-      for (const trozo of this.segunda.grupo) zocalo.write(trozo);
-    });
-    f.servidor.on('error', (e) => {
+
+    const lanzar = (origen, filtros) => spawn(ffmpeg, [
+      '-hide_banner', '-loglevel', 'error',
+      '-flags', 'low_delay',
+      '-probesize', '32', '-analyzeduration', '1', '-fpsprobesize', '0',
+      ...this.#decodificador(origen),
+      '-f', 'h264', '-i', 'pipe:0',
+      '-an', '-vf', filtros,
+      '-fps_mode', 'passthrough',
+      '-f', 'rawvideo', 'pipe:1',
+    ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+
+    const caida = () => {
       if (this.ffmpeg !== f) return;
-      this.ffmpeg = null;
-      this.registro.error('[camara] tuberia de la segunda camara:', e.message);
-      this.#reintentar(2000);
+      this.#pararFfmpeg();
+      this.#reintentar(500);
+      this.emit('estado', this.estado());
+    };
+    const vigilar = (p, cual) => {
+      p.stdin.on('error', () => {});
+      p.stderr.on('data', (d) => {
+        const t = d.toString().trim();
+        if (t) this.registro.error(`[camara] ffmpeg (${cual}):`, t.split('\n')[0]);
+      });
+      p.on('error', (e) => {
+        if (this.ffmpeg !== f) return;
+        this.#motivo('no se pudo lanzar ffmpeg: ' + e.message);
+        this.#pararFfmpeg();
+        this.#reintentar(10000);
+      });
+      p.on('exit', caida);
+    };
+
+    // La salida hacia el ayudante: la misma tuberia en la que antes escribia
+    // ffmpeg directamente.
+    // Como archivo de solo escritura, igual que ffmpeg: la tuberia del ayudante
+    // es de entrada, y abrirla de ida y vuelta (net.connect) da acceso denegado.
+    f.salida = fs.createWriteStream(`\\\\.\\pipe\\${this.ayudante.tuberia}`, { flags: 'w', highWaterMark: 1 << 22 });
+    f.salida.on('error', (e) => {
+      if (this.ffmpeg === f) this.registro.error('[camara] tuberia del ayudante:', e.message);
+      caida();
     });
-    f.servidor.listen(tuberia, () => {
-      if (this.ffmpeg !== f) return f.servidor.close();
-      const decodificador = (o) => this.#decodificador(o);
-      // Marcas de tiempo del reloj: los dos flujos llegan sin ellas y cada movil
-      // va a su ritmo (30 y 60 fps). Con la hora de llegada, ffmpeg empareja cada
-      // fotograma de la principal con el mas reciente de la segunda; sin ellas
-      // contaria fotogramas y el mas rapido acumularia retraso sin fin.
-      const entrada = (origen, fuente) => [
-        '-flags', 'low_delay',
-        '-probesize', '32', '-analyzeduration', '1', '-fpsprobesize', '0',
-        '-use_wallclock_as_timestamps', '1',
-        ...decodificador(origen),
-        '-f', 'h264', '-i', fuente,
-      ];
-      this.#lanzar(f, ffmpeg, [
-        '-hide_banner', '-loglevel', 'error',
-        ...entrada(this.origen, 'pipe:0'),
-        ...entrada(this.segunda.origen, tuberia),
-        '-an', '-filter_complex', plan.complejo, '-map', '[v]',
-        // Con la hora del reloj como marca de tiempo, la base de tiempos por
-        // defecto de la salida (1/25 s) junta varios fotogramas en la misma
-        // marca y ffmpeg llena el registro de avisos de "dts". Con la del
-        // origen (microsegundos) cada uno tiene la suya.
-        '-fps_mode', 'passthrough', '-enc_time_base', 'demux',
-        '-f', 'rawvideo', '-y', `\\\\.\\pipe\\${this.ayudante.tuberia}`,
-      ]);
-      this.registro.log(`[camara] dos camaras en una (${this.opciones.dos})`);
-    });
+    f.salida.on('close', caida);
+
+    f.proceso = lanzar(this.origen, uno.filtros);
+    f.procesoDos = lanzar(this.segunda.origen, dos.filtros);
+    f.entradaDos = f.procesoDos.stdin;
+    vigilar(f.proceso, 'principal');
+    vigilar(f.procesoDos, 'segunda');
+
+    f.procesoDos.stdout.on('data', porFotogramas(dos.w * dos.h * 1.5, (img) => { f.ultimaDos = img; }));
+    f.proceso.stdout.on('data', porFotogramas(uno.w * uno.h * 1.5, (img) => {
+      if (this.ffmpeg !== f) return;
+      // Si el ayudante no traga, se salta este fotograma: mejor uno menos que
+      // ir acumulando retraso.
+      if (f.salida.writableLength > lienzo.length * 2) { this.tirados++; return; }
+      pegar(lienzo, W, H, img, uno.w, uno.h, uno.x, uno.y);
+      // La segunda se pega siempre despues: en 'recuadro' va encima.
+      if (f.ultimaDos) pegar(lienzo, W, H, f.ultimaDos, dos.w, dos.h, dos.x, dos.y);
+      f.salida.write(Buffer.from(lienzo));
+    }));
+
+    // Lo que ya se tenia desde la ultima clave de cada una: sale sin esperar.
+    this.esperandoClave = this.grupo.length === 0;
+    for (const trozo of this.grupo) f.proceso.stdin.write(trozo);
+    this.segunda.esperandoClave = this.segunda.grupo.length === 0;
+    for (const trozo of this.segunda.grupo) f.entradaDos.write(trozo);
+
+    this.registro.log(`[camara] dos camaras en una (${this.opciones.dos})`);
+    this.emit('estado', this.estado());
   }
 
   // Con que decodifica ffmpeg una entrada.
@@ -726,7 +820,7 @@ class CamaraVirtual extends EventEmitter {
   }
 
   #arrancarFfmpeg(ffmpeg, plan, firma) {
-    if (plan.complejo) return this.#arrancarFfmpegDos(ffmpeg, plan, firma);
+    if (plan.dos) return this.#arrancarFfmpegDos(ffmpeg, plan, firma);
     const f = { proceso: null, firma };
     this.ffmpeg = f;
     this.#lanzar(f, ffmpeg, [

@@ -212,10 +212,21 @@ function segundaAlMaximo(id, estado) {
   if (!mejor) return;
   const quiero = `${mejor.largo}x${mejor.corto}`;
   const tiene = estado.resolucion;
-  if (tiene === quiero || tiene === `${mejor.corto}x${mejor.largo}` || pedidoMaximo.get(id) === quiero) return;
-  pedidoMaximo.set(id, quiero);
-  console.log(`[nexo] segunda camara (${id}) a su mejor calidad: ${quiero}`);
-  conexion.enviarControl({ accion: 'cambiar-resolucion', valor: quiero }, id);
+  const pedido = pedidoMaximo.get(id) || {};
+  if (tiene !== quiero && tiene !== `${mejor.corto}x${mejor.largo}` && pedido.resolucion !== quiero) {
+    pedidoMaximo.set(id, { ...pedido, resolucion: quiero });
+    console.log(`[nexo] segunda camara (${id}) a su mejor calidad: ${quiero}`);
+    conexion.enviarControl({ accion: 'cambiar-resolucion', valor: quiero }, id);
+    return; // los fotogramas, cuando conteste con la resolucion ya puesta
+  }
+  // Y los fotogramas por segundo que ese formato permita: una camara a 24 se ve
+  // a saltos al lado de otra a 60 (06/10/2026: las dos se habian quedado a 24).
+  const fps = Math.min(mejor.fpsMax || 30, 60);
+  if (Number(estado.fps) !== fps && pedido.fps !== fps) {
+    pedidoMaximo.set(id, { ...pedidoMaximo.get(id), fps });
+    console.log(`[nexo] segunda camara (${id}) a ${fps} fps`);
+    conexion.enviarControl({ accion: 'cambiar-fps', valor: fps }, id);
+  }
 }
 
 function iniciarCamaraVirtual() {
