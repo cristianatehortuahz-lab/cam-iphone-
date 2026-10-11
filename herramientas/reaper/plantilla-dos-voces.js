@@ -112,10 +112,12 @@ productor.push(l[finVoz]);
 const salida = [...l.slice(0, voz), ...cantante, ...productor, ...l.slice(finVoz + 1)];
 
 // "Directo - cantar" deja la voz en "solo monitoreo" (cuarto valor de REC = 2):
-// suena pero el boton de grabar no graba nada. Con dos voces se quiere grabar
-// cada una en su pista (06/10/2026: "no puedo grabar"), asi que 0 = grabar entrada.
+// suena pero el boton de grabar no graba nada. Aqui se graban las canciones del
+// directo (06/10/2026: "no puedo grabar"), asi que la del cantante (entrada 1)
+// pasa a 0 = grabar entrada. La del productor se queda en solo monitoreo: sale
+// al directo pero no debe quedar grabada (10/10/2026).
 if (ENTRADA) {
-  for (let i = 0; i < salida.length; i++) salida[i] = salida[i].replace(/^(\s*REC 1 \d+ \d+) 2 /, '$1 0 ');
+  for (let i = 0; i < salida.length; i++) salida[i] = salida[i].replace(/^(\s*REC 1 0 \d+) 2 /, '$1 0 ');
 }
 
 if (DIRECTA) {
