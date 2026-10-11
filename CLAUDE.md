@@ -71,7 +71,7 @@ a la carpeta de memoria de Claude de este proyecto; esta guia es solo el mapa.
   `(New-Object -ComObject WScript.Shell).AppActivate(<PID>)`.
 - Dos interfaces a la vez NO se juntan con ASIO4ALL: mete rafagas de ruido en la
   voz (medido el 04-05/10/2026, con el driver generico y con el de M-Audio). Se
-  juntan con VoiceMeeter Banana: la principal por su ASIO (A1), la otra por WDM,
+  juntan con VoiceMeeter Banana: la principal por su ASIO (A1), la otra por KS,
   cada micro a un lado del bus B1, y el DAW en "Voicemeeter Virtual ASIO" (entrada
   1 y 2 = los dos micros; su salida va a las dos interfaces). VoiceMeeter abierto
   ANTES que el DAW. Se maneja con `herramientas/voicemeeter.ps1`.

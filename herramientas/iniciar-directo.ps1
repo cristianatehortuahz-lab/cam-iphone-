@@ -285,11 +285,28 @@ if ($UsaReaper) {
   Paso 'Audio de Reaper'
   Cerrar-Daw 'FL64' 'FL Studio' | Out-Null
   $ini = Join-Path $env:APPDATA 'REAPER\reaper.ini'
+  # Reaper se pasa solo al audio de Windows (mode=1) si un dia no pudo abrir su
+  # driver ASIO (por ejemplo, abierto sin VoiceMeeter), y ya no vuelve: el
+  # 10/10/2026 estaba grabando el micro del PC en vez de las interfaces. Se le
+  # devuelve a ASIO (mode=3) aqui, con Reaper cerrado: al salir pisa su ini.
+  if (-not $SoloComprobar -and (Test-Path $ini) -and -not (Get-Process reaper -ErrorAction SilentlyContinue)) {
+    $txtIni = [IO.File]::ReadAllText($ini)
+    if ($txtIni -match '(?m)^mode=(?!3\r?$)\d+' -and $txtIni -match [regex]::Escape("asio_driver_name=`"$DriverReaper`"")) {
+      [IO.File]::WriteAllText($ini, ($txtIni -replace '(?m)^mode=\d+', 'mode=3'), (New-Object Text.UTF8Encoding $false))
+      Anotar 'OK' 'Reaper estaba en el audio de Windows: devuelto a su driver ASIO'
+    }
+  }
   $cfg = Get-Content $ini -ErrorAction SilentlyContinue
   if (($cfg -match '^mode=3$') -and ($cfg -match [regex]::Escape("asio_driver_name=`"$DriverReaper`""))) { Anotar 'OK' 'Reaper usa su driver de audio' $DriverReaper }
-  else { Anotar 'FALLO' 'Reaper no esta en su driver de audio' "Options > Preferences > Audio > Device: ASIO, $DriverReaper" }
+  else { Anotar 'FALLO' 'Reaper no esta en su driver de audio' "cierra Reaper y vuelve a pasar esto; o en Reaper: Options > Preferences > Audio > Device: ASIO, $DriverReaper" }
+  # "Directo - dos voces" no viene en el kit: la fabrica su generador a partir de
+  # "Directo - cantar". Si falta (PC recien instalado), se vuelve a fabricar.
+  if (-not (Test-Path $PlantillaReaper) -and -not $SoloComprobar -and $NombrePlantilla -eq 'Directo - dos voces' -and
+      (Test-Path (Join-Path (Split-Path $PlantillaReaper) 'Directo - cantar.RPP'))) {
+    node (Join-Path $PSScriptRoot 'reaper\plantilla-dos-voces.js') --entrada 2 --directa | Out-Null
+  }
   if (Test-Path $PlantillaReaper) { Anotar 'OK' "Plantilla de Reaper `"$NombrePlantilla`"" }
-  else { Anotar 'FALLO' 'Falta la plantilla de Reaper' 'herramientas\reaper\crear-plantilla-directo.lua' }
+  else { Anotar 'FALLO' 'Falta la plantilla de Reaper' 'herramientas\reaper\crear-plantilla-directo.lua (y plantilla-dos-voces.js para la de dos voces)' }
   # Con el driver de VoiceMeeter, VoiceMeeter tiene que estar abierto ANTES que
   # Reaper: es su motor el que mueve el audio de las dos interfaces. Guarda su
   # configuracion al cerrarse y la recupera solo.
@@ -356,6 +373,10 @@ function Camara-Virtual-Viva {
 }
 function Reparar-Camara-Virtual {
   if (-not (Test-Path $OBSexe) -or (Get-Process obs64 -ErrorAction SilentlyContinue)) { return $false }
+  # Si OBS se cerro mal la ultima vez, al abrir pregunta "modo seguro o normal"
+  # y se queda esperando sin encender nada: se le quita antes esa marca.
+  $marcas = Join-Path $env:APPDATA 'obs-studio\.sentinel'
+  Get-ChildItem $marcas -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
   Start-Process -FilePath $OBSexe -WorkingDirectory (Split-Path $OBSexe) -WindowStyle Minimized `
     -ArgumentList "--profile `"$PerfilOBS`" --collection `"$PerfilOBS`" --startvirtualcam --minimize-to-tray"
   $fin = (Get-Date).AddSeconds(30); $viva = $false
@@ -369,7 +390,7 @@ function Reparar-Camara-Virtual {
     Start-Sleep -Seconds 4
     Get-Process obs64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
-    Get-ChildItem (Join-Path $env:APPDATA 'obs-studio\.sentinel') -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem $marcas -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
   }
   return $viva
 }
@@ -423,17 +444,6 @@ if (-not $SoloComprobar -and $nexo) {
 
   if ($UsaReaper) {
     if (-not (Get-Process reaper -ErrorAction SilentlyContinue)) {
-      # Reaper se pasa solo al audio de Windows (mode=1) si un dia no pudo abrir
-      # su driver ASIO, y ya no vuelve: el 10/10/2026 estaba grabando el micro
-      # del PC en vez de las interfaces. Se le devuelve a ASIO (mode=3).
-      $iniReaper = Join-Path $env:APPDATA 'REAPER\reaper.ini'
-      if (Test-Path $iniReaper) {
-        $txtIni = [IO.File]::ReadAllText($iniReaper)
-        if ($txtIni -match '(?m)^mode=(?!3\r?$)\d+') {
-          [IO.File]::WriteAllText($iniReaper, ($txtIni -replace '(?m)^mode=\d+', 'mode=3'), (New-Object Text.UTF8Encoding $false))
-          Write-Host '  Reaper estaba en el audio de Windows: devuelto a ASIO'
-        }
-      }
       # -template: abre la plantilla como proyecto nuevo, sin tocar el original.
       Start-Process -FilePath $ReaperExe -ArgumentList '-template', "`"$PlantillaReaper`""
       Write-Host '  abriendo Reaper (si sale el aviso de la licencia de evaluacion, cierralo)...'
@@ -611,7 +621,10 @@ if ($nexo -and $nexo.microIphone -and $nexo.microIphone.activo) {
 
 # Firma de la app del iPhone
 $firma = node (Join-Path $Raiz 'herramientas\caducidad-firma.js') | ConvertFrom-Json
-if ($firma.error) { Anotar 'AVISO' 'No pude leer la firma del iPhone' $firma.error }
+# Si Sideloadly no tiene la app apuntada es que se firmo sin "auto refresh" (o en
+# otro PC): este no puede decir cuando caduca ni renovarla (10/10/2026).
+if ($firma.error -match 'no aparece en Sideloadly') { Anotar 'AVISO' 'Este PC no sabe cuando caduca la app del iPhone ni la renueva' 'dura 7 dias desde la ultima firma: firmala aqui con Sideloadly marcando "auto refresh" (reinstalar.bat)' }
+elseif ($firma.error) { Anotar 'AVISO' 'No pude leer la firma del iPhone' $firma.error }
 elseif ($firma.horasRestantes -lt 0) { Anotar 'FALLO' 'La app del iPhone esta caducada' 'vuelve a firmarla con Sideloadly' }
 elseif ($firma.horasRestantes -lt 48) { Anotar 'AVISO' "La firma caduca en $($firma.horasRestantes) h" 'deja el iPhone por cable: se renueva sola' }
 else { Anotar 'OK' 'Firma del iPhone' "le quedan $([math]::Floor($firma.horasRestantes / 24)) dias" }

@@ -16,6 +16,11 @@
 //
 //   node herramientas/reaper/plantilla-dos-voces.js [identificador]
 //
+// Esa via (el micro por red) quedo de reserva. La vigente desde el 05/10/2026,
+// con VoiceMeeter juntando las dos interfaces, es la que usa iniciar-directo.ps1:
+//
+//   node herramientas/reaper/plantilla-dos-voces.js --entrada 2 --directa
+//
 // Reaper tiene que estar cerrado o no vera la plantilla nueva hasta reabrirlo.
 
 const fs = require('fs');

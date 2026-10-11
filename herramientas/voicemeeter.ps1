@@ -1,4 +1,4 @@
-﻿# Maneja VoiceMeeter Banana desde fuera, con su API remota (VoicemeeterRemote64.dll):
+# Maneja VoiceMeeter Banana desde fuera, con su API remota (VoicemeeterRemote64.dll):
 # lo arranca, lista los dispositivos que ve y lee o cambia sus parametros.
 #
 # VoiceMeeter junta las dos interfaces de audio (AIR 192|4 + M-Track Solo)
@@ -88,9 +88,19 @@ try {
         [pscustomobject]@{ Clase = $clase[$t]; Nombre = "$nom"; Id = "$id" }
       }
     }
-    $salidas = @(Dispositivos 'Output'); $entradas = @(Dispositivos 'Input')
-    $asio = $salidas | Where-Object { $_.Clase -eq 'ASIO' -and $_.Nombre -match [regex]::Escape($Principal) } | Select-Object -First 1
-    $micro = $entradas | Where-Object { $_.Clase -eq 'KS' -and $_.Id -match "VID_$SegundaVid" } | Select-Object -First 1
+    # Recien abierto, VoiceMeeter tarda unos segundos en tener la lista de
+    # dispositivos: se insiste hasta 20 s antes de darlo por perdido. El
+    # 10/10/2026 iniciar-directo lo abrio, monto a los 5 s y VoiceMeeter se quedo
+    # de fabrica (sin interfaces) todo el directo; la causa mas probable es esta.
+    # A la segunda interfaz se la espera menos (6 s): puede no estar enchufada.
+    $asio = $null; $micro = $null
+    for ($intento = 0; $intento -lt 10; $intento++) {
+      if ($intento) { Start-Sleep -Seconds 2; Esperar }
+      $salidas = @(Dispositivos 'Output'); $entradas = @(Dispositivos 'Input')
+      $asio = $salidas | Where-Object { $_.Clase -eq 'ASIO' -and $_.Nombre -match [regex]::Escape($Principal) } | Select-Object -First 1
+      $micro = $entradas | Where-Object { $_.Clase -eq 'KS' -and $_.Id -match "VID_$SegundaVid" } | Select-Object -First 1
+      if ($asio -and ($micro -or $intento -ge 3)) { break }
+    }
     $cascos = $salidas | Where-Object { $_.Clase -eq 'KS' -and $_.Id -match "VID_$SegundaVid" } | Select-Object -First 1
     if (-not $asio) { throw "VoiceMeeter no ve el driver ASIO de la interfaz principal ($Principal)" }
     if (-not $micro) { Write-Host "  AVISO: la segunda interfaz (VID_$SegundaVid) no esta enchufada: solo entra el micro de la principal" }
@@ -134,17 +144,28 @@ try {
     if ($micro) { $pasos += , @('Strip[1].device.ks', $micro.Nombre) }
     if ($cascos) { $pasos += , @('Bus[1].device.ks', $cascos.Nombre) }
     $pasos += , @('Command.Restart', 1)
-    foreach ($p in $pasos) {
-      $c = if ($p[1] -is [string]) { [VM]::VBVMR_SetParameterStringA($p[0], $p[1]) } else { [VM]::VBVMR_SetParameterFloat($p[0], [float]$p[1]) }
-      if ($c -ne 0) { Write-Host ("  ERROR {0} al poner {1}" -f $c, $p[0]) }
-      Start-Sleep -Milliseconds 60
+    # Se comprueba que quedo puesto de verdad (la interfaz y la mezcla, no solo el
+    # nombre) y, si no, se repite una vez: recien abierto VoiceMeeter puede
+    # tragarse las ordenes sin aplicarlas.
+    $quedo = $false
+    for ($vez = 1; $vez -le 2 -and -not $quedo; $vez++) {
+      foreach ($p in $pasos) {
+        $c = if ($p[1] -is [string]) { [VM]::VBVMR_SetParameterStringA($p[0], $p[1]) } else { [VM]::VBVMR_SetParameterFloat($p[0], [float]$p[1]) }
+        if ($c -ne 0) { Write-Host ("  ERROR {0} al poner {1}" -f $c, $p[0]) }
+        Start-Sleep -Milliseconds 60
+      }
+      Start-Sleep -Seconds 4
+      Esperar
+      $s = New-Object Text.StringBuilder 512; [VM]::VBVMR_GetParameterStringA('Bus[0].device.name', $s) | Out-Null
+      $s1 = New-Object Text.StringBuilder 512; [VM]::VBVMR_GetParameterStringA('Strip[1].device.name', $s1) | Out-Null
+      $f = 0.0; [VM]::VBVMR_GetParameterFloat('Bus[0].device.sr', [ref]$f) | Out-Null
+      $b1 = 0.0; [VM]::VBVMR_GetParameterFloat('Strip[1].B1', [ref]$b1) | Out-Null
+      $a2 = 0.0; [VM]::VBVMR_GetParameterFloat('Strip[3].A2', [ref]$a2) | Out-Null
+      $quedo = "$s" -eq $asio.Nombre -and $b1 -eq 1 -and $a2 -eq 1 -and ((-not $micro) -or "$s1" -eq $micro.Nombre)
+      if (-not $quedo -and $vez -eq 1) { Write-Host '  no quedo montado a la primera: lo repito'; Start-Sleep -Seconds 3 }
     }
-    Start-Sleep -Seconds 4
-    Esperar
-    $s = New-Object Text.StringBuilder 512; [VM]::VBVMR_GetParameterStringA('Bus[0].device.name', $s) | Out-Null
-    $f = 0.0; [VM]::VBVMR_GetParameterFloat('Bus[0].device.sr', [ref]$f) | Out-Null
     Write-Host ("  principal: {0} a {1} Hz | segunda: {2}" -f $s, $f, $(if ($micro) { 'micro y auriculares por KS' } else { 'no esta' }))
-    if ("$s" -notmatch [regex]::Escape($Principal)) { throw 'VoiceMeeter no se quedo con la interfaz principal' }
+    if (-not $quedo) { throw 'VoiceMeeter no se quedo con el montaje de las dos interfaces' }
   }
 
   if ($Listar) {
