@@ -27,6 +27,13 @@ const crypto = require('crypto');
 // las dos interfaces en un solo driver ASIO y da cada micro en una entrada.
 const iEntrada = process.argv.indexOf('--entrada');
 const ENTRADA = iEntrada > 0 ? Number(process.argv[iEntrada + 1]) : 0;
+// Con --directa el productor se escucha por la perilla "Direct" de su interfaz
+// (sin retraso y sin efectos, que no los necesita: decidido el 06/10/2026), asi
+// que su voz NO debe volverle desde Reaper: la oiria doble. Su pista sale por
+// los canales 3/4 del Master, que no van a los auriculares, y el ReaStream suma
+// 1/2 + 3/4 para que al directo si llegue. Las salidas 1/2, las que oyen los
+// dos, se quedan con el beat y el cantante.
+const DIRECTA = process.argv.includes('--directa');
 const ID = (iEntrada > 0 ? null : process.argv[2]) || 'nexo-solo';
 const DIR = path.join(process.env.APPDATA, 'REAPER', 'ProjectTemplates');
 const ORIGEN = path.join(DIR, 'Directo - cantar.RPP');
@@ -103,6 +110,40 @@ if (!ENTRADA) productor.push(...cadenaFx.map((x) => x.replace(sangria, l[voz].ma
 productor.push(l[finVoz]);
 
 const salida = [...l.slice(0, voz), ...cantante, ...productor, ...l.slice(finVoz + 1)];
+
+// "Directo - cantar" deja la voz en "solo monitoreo" (cuarto valor de REC = 2):
+// suena pero el boton de grabar no graba nada. Con dos voces se quiere grabar
+// cada una en su pista (06/10/2026: "no puedo grabar"), asi que 0 = grabar entrada.
+if (ENTRADA) {
+  for (let i = 0; i < salida.length; i++) salida[i] = salida[i].replace(/^(\s*REC 1 \d+ \d+) 2 /, '$1 0 ');
+}
+
+if (DIRECTA) {
+  if (!ENTRADA) throw new Error('--directa solo vale con --entrada');
+  const en = (re) => { const i = salida.findIndex((x) => re.test(x)); if (i < 0) throw new Error('no encuentro ' + re); return i; };
+  // La pista del productor (la segunda), a los canales 3/4 del Master.
+  const p = en(/NAME "Voz productor/);
+  const m = salida.findIndex((x, i) => i > p && /^\s*MAINSEND /.test(x));
+  salida[m] = salida[m].replace(/MAINSEND .*/, 'MAINSEND 1 2');
+  // Master de 4 canales: solo 1/2 sale por el driver. Los 3/4 no van a ninguna
+  // salida: sacarlos por la 5/6 y mezclarlos en VoiceMeeter (modo Amix del bus)
+  // dejo los auriculares de la AIR solo por la izquierda (06/10/2026).
+  const n = en(/^\s*MASTER_NCH /);
+  salida[n] = salida[n].replace(/MASTER_NCH \d+/, 'MASTER_NCH 4');
+  // Patillas del ReaStream del Master. Su cabecera: 8 bytes, n.o de entradas,
+  // una mascara de canales de 8 bytes por entrada, n.o de salidas y sus mascaras.
+  // Entrada izquierda = canales 1+3, derecha = 2+4; salidas sueltas, para que
+  // no devuelva la suma a los canales 1/2.
+  const r = en(/^\s*<VST "VST: ReaStream/);
+  const a = Buffer.from(salida[r + 1].trim(), 'base64'), b = Buffer.from(salida[r + 2].trim(), 'base64');
+  const c = Buffer.concat([a, b]);
+  if (c.readUInt32LE(8) !== 8 || c.readUInt32LE(76) !== 8) throw new Error('la cabecera de ReaStream no es la esperada: no la toco');
+  c.writeBigUInt64LE(5n, 12); c.writeBigUInt64LE(10n, 20);
+  for (let k = 0; k < 8; k++) c.writeBigUInt64LE(0n, 80 + 8 * k);
+  const sg = salida[r + 1].match(/^\s*/)[0];
+  salida[r + 1] = sg + c.subarray(0, a.length).toString('base64');
+  salida[r + 2] = sg + c.subarray(a.length).toString('base64');
+}
 if (fs.existsSync(DESTINO)) fs.copyFileSync(DESTINO, DESTINO + '.anterior');
 fs.writeFileSync(DESTINO, salida.join('\n'));
 

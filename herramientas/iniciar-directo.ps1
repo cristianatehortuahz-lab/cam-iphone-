@@ -190,6 +190,8 @@ if ($Modo -eq 'Producir' -and -not $HayFL) {
   Write-Host '  FL Studio no esta en este PC: uso Reaper (modo Componer)' -ForegroundColor Yellow
   $Modo = 'Componer'
 }
+# config-pc.json puede fijar el modo de este PC para no preguntarlo cada vez.
+if (-not $Modo -and $cfgPC -and $cfgPC.modo -in 'Karaoke', 'Componer', 'Producir') { $Modo = $cfgPC.modo }
 if (-not $Modo) {
   if ($Desatendido -or $SoloComprobar) { $Modo = 'Componer' }
   else {
@@ -204,6 +206,11 @@ if (-not $Modo) {
   }
 }
 $UsaOBS = $Modo -ne 'Karaoke'
+# Solo TikTok, sin YouTube: config-pc.json > obs.usar = false (decidido el
+# 10/10/2026 en el PC de las dos interfaces). Y sin la ventana "Nexo - Camara"
+# donde TikTok ya coge la camara como webcam: camara.ventana = false.
+if ($cfgPC -and $cfgPC.obs -and $cfgPC.obs.usar -eq $false) { $UsaOBS = $false }
+$UsaVentanaCamara = -not ($cfgPC -and $cfgPC.camara -and $cfgPC.camara.ventana -eq $false)
 $UsaReaper = $Modo -ne 'Producir'
 Write-Host "  Modo: $Modo" -ForegroundColor Cyan
 # En karaoke el navegador es parte del directo: no se cierra.
@@ -304,6 +311,12 @@ if ($UsaReaper) {
       try {
         $montaje = & (Join-Path $PSScriptRoot 'voicemeeter.ps1') -Montar -Principal $EntradaInterfaz 6>&1 | Out-String
         Anotar 'OK' 'VoiceMeeter con las dos interfaces' (($montaje -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1).Trim())
+        # Si hubo que montarlo, su motor se reinicio. Un Reaper que ya estaba
+        # abierto se queda con el bufer viejo y entrega la mitad de las muestras:
+        # crujido en los auriculares (medido el 10/10/2026). Hay que reabrirlo.
+        if ($montaje -notmatch 'ya estaba montado' -and (Get-Process reaper -ErrorAction SilentlyContinue)) {
+          Anotar 'AVISO' 'Reaper estaba abierto mientras se montaba VoiceMeeter' 'cierralo y vuelve a abrirlo, o sonara con crujido'
+        }
       } catch {
         Anotar 'FALLO' 'VoiceMeeter no quedo montado' $_.Exception.Message
       }
@@ -332,7 +345,41 @@ if ($UsaReaper) {
 
 # ---------------------------------------------------------- 3. Nexo --------
 
+# La "OBS Virtual Camera" que alimenta Nexo puede amanecer sin ofrecer ningun
+# formato de video: Nexo dice "en marcha" y cuenta fotogramas, pero TikTok pinta
+# la camara tachada y ffmpeg da "Could not find output pin" (10/10/2026, tambien
+# con Nexo cerrado). Se cura arrancando una vez la camara virtual del propio OBS.
+function Camara-Virtual-Viva {
+  if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { return $true }
+  $salida = cmd /c 'ffmpeg -hide_banner -f dshow -list_options true -i "video=OBS Virtual Camera" 2>&1' | Out-String
+  return ($salida -notmatch 'Could not find output pin')
+}
+function Reparar-Camara-Virtual {
+  if (-not (Test-Path $OBSexe) -or (Get-Process obs64 -ErrorAction SilentlyContinue)) { return $false }
+  Start-Process -FilePath $OBSexe -WorkingDirectory (Split-Path $OBSexe) -WindowStyle Minimized `
+    -ArgumentList "--profile `"$PerfilOBS`" --collection `"$PerfilOBS`" --startvirtualcam --minimize-to-tray"
+  $fin = (Get-Date).AddSeconds(30); $viva = $false
+  do { Start-Sleep -Seconds 3; $viva = Camara-Virtual-Viva } while (-not $viva -and (Get-Date) -lt $fin)
+  # Con su camara virtual encendida OBS no atiende al cierre normal: se termina,
+  # y se quita su marca de "cierre incorrecto" para que no pregunte por el modo
+  # seguro la proxima vez que se abra.
+  $obs = Get-Process obs64 -ErrorAction SilentlyContinue
+  if ($obs) {
+    $obs | ForEach-Object { $_.CloseMainWindow() | Out-Null }
+    Start-Sleep -Seconds 4
+    Get-Process obs64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+    Get-ChildItem (Join-Path $env:APPDATA 'obs-studio\.sentinel') -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+  }
+  return $viva
+}
+
 Paso 'Nexo Desktop'
+if (-not $SoloComprobar -and -not (Nexo-Abierto) -and -not (Camara-Virtual-Viva)) {
+  Write-Host '  la camara virtual no ofrece video: la reparo con OBS (unos segundos)...'
+  if (Reparar-Camara-Virtual) { Anotar 'OK' 'Camara virtual reparada' 'no ofrecia ningun formato de video' }
+  else { Anotar 'AVISO' 'La camara virtual sigue sin ofrecer video' 'abre OBS > Iniciar camara virtual, cierralo y vuelve a pasar esto' }
+}
 if (-not (Nexo-Abierto)) {
   if ($SoloComprobar) {
     Anotar 'FALLO' 'Nexo Desktop no esta abierto'
@@ -353,15 +400,17 @@ if (-not $SoloComprobar -and $nexo) {
 
   # Ventana de la camara que captura TikTok. Va al portatil, debajo de OBS: puede
   # quedar tapada, pero no minimizada.
-  if (-not (Camara-Abierta)) {
-    Start-Process -FilePath $Electron -ArgumentList "`"$(Join-Path $Raiz 'herramientas\ventana-camara\main.js')`"", '1:1'
-    $h = Esperar-Ventana 'Nexo - Camara' $null 20
-    if ($h -ne [IntPtr]::Zero) {
-      $a = $portatil.WorkingArea
-      [Ventanas]::SetWindowPos($h, [IntPtr]::Zero, $a.X + 20, $a.Y + 20, 0, 0, 0x0001 -bor 0x0004) | Out-Null
+  if ($UsaVentanaCamara) {
+    if (-not (Camara-Abierta)) {
+      Start-Process -FilePath $Electron -ArgumentList "`"$(Join-Path $Raiz 'herramientas\ventana-camara\main.js')`"", '1:1'
+      $h = Esperar-Ventana 'Nexo - Camara' $null 20
+      if ($h -ne [IntPtr]::Zero) {
+        $a = $portatil.WorkingArea
+        [Ventanas]::SetWindowPos($h, [IntPtr]::Zero, $a.X + 20, $a.Y + 20, 0, 0, 0x0001 -bor 0x0004) | Out-Null
+      }
     }
+    if (Camara-Abierta) { Anotar 'OK' 'Ventana de la camara para TikTok' } else { Anotar 'FALLO' 'No se abrio la ventana de la camara' }
   }
-  if (Camara-Abierta) { Anotar 'OK' 'Ventana de la camara para TikTok' } else { Anotar 'FALLO' 'No se abrio la ventana de la camara' }
 
   if ($UsaOBS) {
     if (-not (Get-Process obs64 -ErrorAction SilentlyContinue)) {
@@ -374,6 +423,17 @@ if (-not $SoloComprobar -and $nexo) {
 
   if ($UsaReaper) {
     if (-not (Get-Process reaper -ErrorAction SilentlyContinue)) {
+      # Reaper se pasa solo al audio de Windows (mode=1) si un dia no pudo abrir
+      # su driver ASIO, y ya no vuelve: el 10/10/2026 estaba grabando el micro
+      # del PC en vez de las interfaces. Se le devuelve a ASIO (mode=3).
+      $iniReaper = Join-Path $env:APPDATA 'REAPER\reaper.ini'
+      if (Test-Path $iniReaper) {
+        $txtIni = [IO.File]::ReadAllText($iniReaper)
+        if ($txtIni -match '(?m)^mode=(?!3\r?$)\d+') {
+          [IO.File]::WriteAllText($iniReaper, ($txtIni -replace '(?m)^mode=\d+', 'mode=3'), (New-Object Text.UTF8Encoding $false))
+          Write-Host '  Reaper estaba en el audio de Windows: devuelto a ASIO'
+        }
+      }
       # -template: abre la plantilla como proyecto nuevo, sin tocar el original.
       Start-Process -FilePath $ReaperExe -ArgumentList '-template', "`"$PlantillaReaper`""
       Write-Host '  abriendo Reaper (si sale el aviso de la licencia de evaluacion, cierralo)...'
@@ -415,10 +475,7 @@ if (-not $SoloComprobar -and $nexo) {
     else { Anotar 'FALLO' 'Chrome no se abrio' }
   }
 
-  if (-not (Get-Process 'TikTok LIVE Studio' -ErrorAction SilentlyContinue)) {
-    if (Test-Path $TikTokExe) { Start-Process -FilePath $TikTokExe; Start-Sleep -Seconds 5 }
-  }
-  if (Get-Process 'TikTok LIVE Studio' -ErrorAction SilentlyContinue) { Anotar 'OK' 'TikTok LIVE Studio' } else { Anotar 'AVISO' 'TikTok LIVE Studio no esta abierto' }
+  # TikTok LIVE Studio se abre mas abajo, cuando las camaras ya estan saliendo.
 }
 
 # --------------------------------------------------- 5. comprobaciones -----
@@ -500,6 +557,38 @@ if ($cam -and $cam.activa) {
   elseif ($cam.motivo) { Anotar 'AVISO' 'La camara de Nexo no sale como webcam' $cam.motivo }
   else { Anotar 'AVISO' 'La camara de Nexo espera al iPhone por cable' }
 }
+
+# --- Segunda camara (Android) y TikTok LIVE Studio ---
+# TikTok enciende su fuente "Camara" UNA vez, al abrir, con el tamano que tiene
+# guardado. Si en ese momento la camara de Nexo no lo ofrece (falta un movil: una
+# camara sale a 1920x1080, las dos apiladas a 1080x1216) da error y no lo vuelve
+# a intentar: camara tachada hasta reiniciar TikTok (10/10/2026). Por eso TikTok
+# se abre el ultimo, con los moviles ya dentro. Corre como administrador: desde
+# aqui no se le puede ni cerrar ni hacer clic.
+$adb = Join-Path $Raiz 'herramientas\platform-tools\adb.exe'
+$hayAndroid = (Test-Path $adb) -and ((& $adb devices 2>$null) -match "`tdevice")
+if ($nexo -and $hayAndroid) {
+  if (-not $nexo.camaraVirtual.conSegunda) {
+    Write-Host '  >> Abre Nexo Cam en el Android y dejala en pantalla (esperando hasta 40 s)...' -ForegroundColor Yellow
+    $fin = (Get-Date).AddSeconds(40)
+    do { Start-Sleep -Seconds 2; $nexo = Estado-Nexo } while ($nexo -and -not $nexo.camaraVirtual.conSegunda -and (Get-Date) -lt $fin)
+  }
+  if ($nexo -and $nexo.camaraVirtual.conSegunda) { Anotar 'OK' 'Las dos camaras juntas' $nexo.camaraVirtual.tamano }
+  else { Anotar 'AVISO' 'El Android esta por cable pero no envia' 'abre Nexo Cam en el Android; al entrar cambia el tamano y hay que reiniciar TikTok' }
+} elseif ($nexo -and (Test-Path $adb)) {
+  Anotar 'AVISO' 'Sin segunda camara (Android)' 'activa la Depuracion por USB en el movil y abre Nexo Cam'
+}
+$cam = if ($nexo) { $nexo.camaraVirtual } else { $null }
+if ($cam -and $cam.enMarcha -and -not (Camara-Virtual-Viva)) {
+  Anotar 'FALLO' 'La camara virtual no ofrece video a otros programas' 'cierra Nexo y vuelve a pasar esto: la repara antes de abrirlo'
+}
+$tiktokYaEstaba = [bool](Get-Process 'TikTok LIVE Studio' -ErrorAction SilentlyContinue)
+if (-not $SoloComprobar -and -not $tiktokYaEstaba -and (Test-Path $TikTokExe)) {
+  Start-Process -FilePath $TikTokExe; Start-Sleep -Seconds 6
+}
+if (-not (Get-Process 'TikTok LIVE Studio' -ErrorAction SilentlyContinue)) { Anotar 'AVISO' 'TikTok LIVE Studio no esta abierto' 'abrelo cuando las camaras ya esten saliendo' }
+elseif ($tiktokYaEstaba) { Anotar 'AVISO' 'TikTok LIVE Studio ya estaba abierto' 'si la camara sale tachada, cierralo y vuelve a abrirlo' }
+else { Anotar 'OK' 'TikTok LIVE Studio' "abierto con la camara a $($cam.tamano)" }
 # Encendido por descuido mete en el directo la voz sin Auto-Tune y lo que suene
 # por los altavoces: que se vea antes de emitir.
 if ($nexo -and $nexo.microIphone -and $nexo.microIphone.activo) {
@@ -552,7 +641,8 @@ if ($fallos) {
     }
     'Componer' {
       Write-Host '  Arrastra el beat a la pista "Beat" de Reaper.' -ForegroundColor Green
-      Write-Host '  En TikTok elige la escena "Componer". Luego "Iniciar transmision" en OBS e "Iniciar LIVE" en TikTok.' -ForegroundColor Green
+      if ($UsaOBS) { Write-Host '  En TikTok elige la escena "Componer". Luego "Iniciar transmision" en OBS e "Iniciar LIVE" en TikTok.' -ForegroundColor Green }
+      else { Write-Host '  En TikTok entra al estudio, mira que se vean las camaras y Reaper, y pulsa "Iniciar LIVE".' -ForegroundColor Green }
     }
     default {
       Write-Host '  Pulsa "Iniciar transmision" en OBS (YouTube) e "Iniciar LIVE" en TikTok.' -ForegroundColor Green
@@ -564,7 +654,12 @@ if ($avisos) {
   foreach ($a in $avisos) { Write-Host "   - $($a.Que): $($a.Detalle)" -ForegroundColor Yellow }
 }
 Write-Host ''
-Write-Host '  Recuerda: no cierres la ventana "Nexo - Camara 1:1" (TikTok dejaria de verla).'
-Write-Host '  Si en TikTok la camara sale en negro o en blanco: engranaje de "electron.exe" >'
-Write-Host '  Seleccionar programa > "electron.exe Nexo - Camara 1:1" > Aplicar.'
+if ($UsaVentanaCamara) {
+  Write-Host '  Recuerda: no cierres la ventana "Nexo - Camara 1:1" (TikTok dejaria de verla).'
+  Write-Host '  Si en TikTok la camara sale en negro o en blanco: engranaje de "electron.exe" >'
+  Write-Host '  Seleccionar programa > "electron.exe Nexo - Camara 1:1" > Aplicar.'
+} else {
+  Write-Host '  Si en TikTok la camara sale tachada: cierra TikTok LIVE Studio y vuelve a abrirlo'
+  Write-Host '  con los dos moviles ya enviando. No bloquees los moviles durante el directo.'
+}
 Write-Host ''

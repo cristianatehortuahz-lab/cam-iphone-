@@ -1,4 +1,4 @@
-# Maneja VoiceMeeter Banana desde fuera, con su API remota (VoicemeeterRemote64.dll):
+﻿# Maneja VoiceMeeter Banana desde fuera, con su API remota (VoicemeeterRemote64.dll):
 # lo arranca, lista los dispositivos que ve y lee o cambia sus parametros.
 #
 # VoiceMeeter junta las dos interfaces de audio (AIR 192|4 + M-Track Solo)
@@ -25,7 +25,15 @@ param(
   # la segunda (08BB = el chip de la M-Track Solo).
   [string]$Principal = 'AIR 192',
   [string]$SegundaVid = '08BB',
-  [int]$Buffer = 128
+  # Bufer del ASIO principal: 0 = el que tenga puesto el panel de su driver (la
+  # AIR: "M-Audio AIR 192 4 Control Panel", 256). Dos lecciones del 06-10/10/2026:
+  # - tras cambiar el bufer hay que REABRIR el DAW: si no, sigue con el tamano
+  #   viejo y entrega la mitad de las muestras (crujido en los auriculares);
+  # - por debajo de 256 la AIR cruje de oido (probado 128, 144 y 192) aunque las
+  #   muestras lleguen enteras. 256 es su minimo limpio con este montaje.
+  [int]$Buffer = 0,
+  # La segunda interfaz va por KS.
+  [int]$BufferSegunda = 256
 )
 $ErrorActionPreference = 'Stop'
 $dll = 'C:\Program Files (x86)\VB\Voicemeeter\VoicemeeterRemote64.dll'
@@ -94,14 +102,19 @@ try {
     $sr = 0.0; [VM]::VBVMR_GetParameterFloat('Bus[0].device.sr', [ref]$sr) | Out-Null
     $b1 = 0.0; [VM]::VBVMR_GetParameterFloat('Strip[1].B1', [ref]$b1) | Out-Null
     $a2 = 0.0; [VM]::VBVMR_GetParameterFloat('Strip[3].A2', [ref]$a2) | Out-Null
-    if ("$ya" -eq $asio.Nombre -and $sr -eq 44100 -and $b1 -eq 1 -and $a2 -eq 1 -and ((-not $micro) -or "$ya1" -eq $micro.Nombre)) {
+    $bf = 0.0; [VM]::VBVMR_GetParameterFloat('Option.buffer.asio', [ref]$bf) | Out-Null
+    # 48 000 tambien vale: la principal se queda ahi cuando es el altavoz
+    # predeterminado de Windows, y la cadena hasta TikTok sigue la frecuencia que
+    # mande el DAW (10/10/2026). Exigir 44 100 reiniciaba el motor en cada arranque.
+    $bk = 0.0; [VM]::VBVMR_GetParameterFloat('Option.buffer.ks', [ref]$bk) | Out-Null
+    if ("$ya" -eq $asio.Nombre -and $sr -in 44100, 48000 -and $bf -eq $Buffer -and $bk -eq $BufferSegunda -and $b1 -eq 1 -and $a2 -eq 1 -and ((-not $micro) -or "$ya1" -eq $micro.Nombre)) {
       Write-Host ("  ya estaba montado: {0} a {1} Hz" -f $ya, $sr)
       return
     }
 
     # En orden: primero el motor, luego la mezcla y al final los dispositivos.
     $pasos = @(
-      @('Option.sr', 44100), @('Option.buffer.asio', $Buffer), @('Option.buffer.ks', $Buffer),
+      @('Option.sr', 44100), @('Option.buffer.asio', $Buffer), @('Option.buffer.ks', $BufferSegunda),
       # Cada micro a un lado del bus B1, que es lo que el DAW recibe por
       # "Voicemeeter Virtual ASIO": entrada 1 = principal, entrada 2 = segunda.
       @('Strip[0].Mono', 1), @('Strip[0].Pan_x', -0.5), @('Strip[0].Gain', 0), @('Strip[0].Mute', 0),

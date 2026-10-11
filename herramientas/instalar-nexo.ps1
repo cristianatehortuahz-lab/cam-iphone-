@@ -195,6 +195,9 @@ if ($previo -and $previo.camara) { $config.camara = $previo.camara }
 # en el PC de las dos interfaces): iniciar-directo.ps1 los lee de aqui.
 if ($previo -and $previo.reaper.asio) { $config.reaper.asio = $previo.reaper.asio }
 if ($previo -and $previo.reaper.plantilla) { $config.reaper.plantilla = $previo.reaper.plantilla }
+# Y con el modo fijo y el "solo TikTok" (obs.usar = false) de ese mismo PC.
+if ($previo -and $previo.modo) { $config.modo = $previo.modo }
+if ($previo -and $previo.obs -and $previo.obs.usar -eq $false) { $config.obs.usar = $false }
 if (-not $SoloComprobar) {
   # Sin BOM: tambien lo puede leer Node.
   [IO.File]::WriteAllText($archivoCfg, ($config | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))

@@ -76,6 +76,16 @@ a la carpeta de memoria de Claude de este proyecto; esta guia es solo el mapa.
   1 y 2 = los dos micros; su salida va a las dos interfaces). VoiceMeeter abierto
   ANTES que el DAW. Se maneja con `herramientas/voicemeeter.ps1`.
   `micro-windows.js` queda de reserva: llega al DAW ~55 ms tarde.
+  - Tras cambiar un bufer o reiniciar el motor de VoiceMeeter hay que REABRIR el
+    DAW: si no, entrega la mitad de las muestras y cruje (`comprobar-audio.js` lo
+    delata: ~25 000 muestras/s en vez de 44 100 o 48 000).
+  - El bufer de la principal se pone en el panel de su driver, no en VoiceMeeter.
+    La AIR cruje de oido por debajo de 256 (probado 128, 144 y 192 el 10/10/2026).
+  - Reaper se pasa solo al audio de Windows (`mode=1`) si un dia no pudo abrir su
+    ASIO; `iniciar-directo.ps1` lo devuelve a `mode=3`.
+  - Plantilla "Directo - dos voces": `plantilla-dos-voces.js --entrada 2 --directa`.
+    El productor se oye por la perilla Direct de su interfaz (sin efectos) y su
+    pista no vuelve a los auriculares, pero si va al directo.
 - FL: la entrada del Master en "In 1" mono, con "Monitorear la entrada externa:
   Activo". En "Cuando este armada" entra silencio tras abrir el proyecto.
 - ASIO Link Pro esta en version de prueba y corta el sonido a proposito. No se usa.
@@ -84,6 +94,11 @@ a la carpeta de memoria de Claude de este proyecto; esta guia es solo el mapa.
   Nunca toques `service.json` (clave de emision).
 - TikTok LIVE Studio:
   - nunca pulses "Iniciar LIVE": lo pulsa el usuario;
+  - corre como administrador: desde una sesion normal no se le puede hacer clic
+    ni cerrar (hace falta un PowerShell elevado, con el aviso de Windows);
+  - enciende su fuente "Camara" una sola vez, al abrir, con el tamano guardado.
+    Si entonces la camara de Nexo no lo ofrece (falta un movil), queda tachada
+    hasta reiniciar TikTok: se abre el ultimo, con los moviles ya enviando;
   - su fuente "Enlace" no decodifica H.264;
   - su lista de ventanas es caprichosa: que una ventana no salga no prueba nada.
 - Camara virtual:
@@ -93,6 +108,10 @@ a la carpeta de memoria de Claude de este proyecto; esta guia es solo el mapa.
   - TikTok la refleja y le aplica su retoque ("Mejorar") por su cuenta: lo que
     sale de Nexo es exacto (comprobado leyendola con ffmpeg);
   - si OBS inicia SU camara virtual, las dos se pisan: en este montaje no se usa;
+  - puede amanecer sin ofrecer ningun formato de video (ffmpeg: "Could not find
+    output pin") aunque Nexo diga "en marcha". Se cura arrancando una vez la de
+    OBS (`obs64 --startvirtualcam`) y cerrandolo; `iniciar-directo.ps1` lo hace
+    solo antes de abrir Nexo (10/10/2026);
   - a 4K este PC no da abasto (9 fps): el directo va a 720p;
   - con ffmpeg, ni `-fflags nobuffer` ni `-analyzeduration 0`: ver el comentario
     en `camara-virtual.js`.
