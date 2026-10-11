@@ -512,6 +512,10 @@ if ($nexo -and $nexo.audioFL.llega) {
   $audio = node (Join-Path $Raiz 'herramientas\comprobar-audio.js') 4 | ConvertFrom-Json
   if ($audio.error) {
     Anotar 'AVISO' 'No pude medir el audio' $audio.error
+  } elseif ([int]$audio.muestrasPorSegundo -gt 0 -and [int]$audio.muestrasPorSegundo -lt 40000) {
+    # Medio audio: el DAW se quedo con el bufer viejo tras un cambio o un
+    # reinicio del motor de VoiceMeeter. Se oye como crujido (10/10/2026).
+    Anotar 'FALLO' "El DAW entrega solo $($audio.muestrasPorSegundo) muestras por segundo (crujido)" 'cierra el DAW y vuelve a abrirlo'
   } elseif ($audio.segundosSilencio -ge 2) {
     Anotar 'FALLO' 'FL manda silencio absoluto' 'Master > entrada In 1 > Monitorear la entrada externa: Activo (y driver de la M-Audio)'
   } elseif ([math]::Max([double]$audio.nivelL, [double]$audio.nivelR) -lt -80) {
@@ -521,7 +525,7 @@ if ($nexo -and $nexo.audioFL.llega) {
   } elseif ($audio.desequilibrioDb -ge 3) {
     Anotar 'FALLO' "Audio descompensado ($($audio.desequilibrioDb) dB entre canales)" 'Master > entrada: In 1 en MONO, no "In 1 - In 2"'
   } else {
-    Anotar 'OK' 'Audio de FL llega a OBS y TikTok' "nivel $($audio.nivelL) dB, centrado"
+    Anotar 'OK' "Audio de $(if ($UsaReaper) { 'Reaper' } else { 'FL' }) llega a $(if ($UsaOBS) { 'OBS y TikTok' } else { 'TikTok' })" "nivel $($audio.nivelL) dB, centrado, $($audio.muestrasPorSegundo) muestras/s"
   }
 } elseif ($nexo) {
   # Sin paquetes puede ser que la M-Audio este "colgada": Windows la ve conectada
@@ -577,6 +581,16 @@ if ($nexo -and $hayAndroid) {
   else { Anotar 'AVISO' 'El Android esta por cable pero no envia' 'abre Nexo Cam en el Android; al entrar cambia el tamano y hay que reiniciar TikTok' }
 } elseif ($nexo -and (Test-Path $adb)) {
   Anotar 'AVISO' 'Sin segunda camara (Android)' 'activa la Depuracion por USB en el movil y abre Nexo Cam'
+}
+# Con dos camaras cada una va en una franja 16:9: un formato 4:3 (el "3024p 4:3"
+# del desplegable del estudio) sale con bandas, casi cuadrado (10/10/2026).
+if ($nexo -and $nexo.camaraVirtual.conSegunda) {
+  foreach ($c in @($nexo.camaras)) {
+    $lados = @("$($c.resolucion)" -split 'x' | ForEach-Object { [int]$_ } | Sort-Object -Descending)
+    if ($lados.Count -eq 2 -and $lados[1] -gt 0 -and [math]::Abs($lados[0] / $lados[1] - 16 / 9) -gt 0.03) {
+      Anotar 'AVISO' "Una camara va en formato casi cuadrado ($($c.resolucion))" 'en el estudio de Nexo elige una calidad "horizontal" 4K o 1080p, no las "4:3"'
+    }
+  }
 }
 $cam = if ($nexo) { $nexo.camaraVirtual } else { $null }
 if ($cam -and $cam.enMarcha -and -not (Camara-Virtual-Viva)) {
