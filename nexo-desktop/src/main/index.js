@@ -208,7 +208,13 @@ const pedidoMaximo = new Map(); // id de camara -> lo que ya se le pidio
 function segundaAlMaximo(id, estado) {
   const conf = ajustes.get('camaraVirtual');
   if (!conf.segundaAlMaximo || !estado || !porCable(id)) return;
-  const mejor = (estado.formatos || []).slice().sort((a, b) => b.largo - a.largo)[0];
+  // El mejor de los 16:9, no el mas grande a secas: el iPhone ofrece 4032x3024
+  // (4:3, el de fotos) y en su franja 16:9 salia recortado, casi cuadrado
+  // (10/10/2026). Si no hay ninguno 16:9, el mas grande.
+  const todos = (estado.formatos || []).slice();
+  const panoramicos = todos.filter((f) => Math.abs(f.largo / f.corto - 16 / 9) < 0.02);
+  const mejor = (panoramicos.length ? panoramicos : todos)
+    .sort((a, b) => b.largo - a.largo || (b.fpsMax || 0) - (a.fpsMax || 0))[0];
   if (!mejor) return;
   const quiero = `${mejor.largo}x${mejor.corto}`;
   const tiene = estado.resolucion;
