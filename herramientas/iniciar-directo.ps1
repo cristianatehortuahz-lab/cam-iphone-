@@ -337,6 +337,11 @@ if ($UsaReaper) {
       } catch {
         Anotar 'FALLO' 'VoiceMeeter no quedo montado' $_.Exception.Message
       }
+      # Y vigilado: su motor se ha parado solo en mitad de la tarde (10 y
+      # 16/10/2026) y el directo se quedaba mudo. El vigia lo reinicia si todas
+      # las entradas se quedan a cero unos segundos. Solo corre uno a la vez.
+      Start-Process -FilePath 'powershell' -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $PSScriptRoot 'vigia-audio.ps1')`""
+      Anotar 'OK' 'Vigia del audio en marcha' 'si el motor de audio se para, lo levanta solo (bitacora: %TEMP%\nexo-vigia-audio.log)'
     }
   }
 } else {
