@@ -35,6 +35,14 @@ static class CamVirtual
     const uint ARRANCANDO = 1, LISTO = 2, PARANDO = 3;
     const int SIN_IMAGEN_MS = 3000;    // sin fotogramas este tiempo, a negro
 
+    // La cola tiene que seguir referenciada mientras viva el programa. Si se
+    // queda en una variable local que ya no se usa, el recolector de basura la
+    // finaliza, se cierra su manejador y Windows borra el NOMBRE de la cola,
+    // aunque la vista siga abierta y se siga escribiendo: Nexo cuenta fotogramas
+    // y nadie los ve (TikTok y ffmpeg, el cartel de "camara apagada" de OBS).
+    // Paso el 16/10/2026 a 1920x1080 (los buferes grandes adelantan la
+    // recoleccion); probablemente tambien la "camara muerta" del 10/10.
+    static MemoryMappedFile mapa;
     static MemoryMappedViewAccessor v;
     static IntPtr memoria;  // direccion de la cola, para copiar los fotogramas
     static readonly uint[] desp = new uint[3];
@@ -67,7 +75,7 @@ static class CamVirtual
         long total = Alinear(CABECERA);
         for (int i = 0; i < 3; i++) { desp[i] = (uint)total; total = Alinear(total + tam + CABECERA_FOTOGRAMA); }
 
-        MemoryMappedFile mapa = Crear(total);
+        mapa = Crear(total);
         if (mapa == null)
         {
             // OBS (u otro programa) tiene su camara virtual en marcha: no se pisa.

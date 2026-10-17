@@ -113,10 +113,14 @@ a la carpeta de memoria de Claude de este proyecto; esta guia es solo el mapa.
   - TikTok la refleja y le aplica su retoque ("Mejorar") por su cuenta: lo que
     sale de Nexo es exacto (comprobado leyendola con ffmpeg);
   - si OBS inicia SU camara virtual, las dos se pisan: en este montaje no se usa;
-  - puede amanecer sin ofrecer ningun formato de video (ffmpeg: "Could not find
-    output pin") aunque Nexo diga "en marcha". Se cura arrancando una vez la de
-    OBS (`obs64 --startvirtualcam`) y cerrandolo; `iniciar-directo.ps1` lo hace
-    solo antes de abrir Nexo (10/10/2026);
+  - "camara muerta" (TikTok y ffmpeg ven el cartel gris de OBS mientras Nexo
+    cuenta fotogramas): la cola compartida de `camvirtual.cs` se quedaba sin
+    NOMBRE porque su manejador estaba en una variable local que el recolector de
+    .NET finalizaba. Arreglado el 16/10/2026 (campo estatico). Se comprueba
+    abriendo `OBSVirtualCamVideo` desde otro proceso;
+  - una aplicacion que tenga abierta una cola vieja (TikTok la retiene aunque se
+    marque "parando") impide crear la nueva: Nexo dice "otra aplicacion ya usa
+    la camara virtual" y hay que reiniciar esa aplicacion;
   - a 4K este PC no da abasto (9 fps): el directo va a 720p;
   - con ffmpeg, ni `-fflags nobuffer` ni `-analyzeduration 0`: ver el comentario
     en `camara-virtual.js`.
