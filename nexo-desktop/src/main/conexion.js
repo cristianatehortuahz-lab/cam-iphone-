@@ -84,6 +84,7 @@ class Conexion extends EventEmitter {
       // falta o falla, es como si no hubiera ninguno.
       const androides = await android.listarDispositivos().catch(() => []);
       this.#avisarAndroidSinPermiso(androides);
+      await this.#cuidarAndroid(androides);
 
       const habia = this.hayCable;
       this.hayCable = dispositivos.length > 0 || androides.some((a) => a.listo);
@@ -138,8 +139,22 @@ class Conexion extends EventEmitter {
           continue;
         }
         const soltar = () => this.conectando.delete(id);
-        ses.once('listo', soltar);
-        ses.once('fin', soltar);
+        let saludo = false;
+        ses.once('listo', () => { saludo = true; this.androidSinSaludo.set(movil.serie, 0); soltar(); });
+        ses.once('fin', () => {
+          soltar();
+          if (saludo) return;
+          // Tunel abierto y cerrado sin saludo: la app no esta abierta o no
+          // contesta. A los ~20 s seguidos se la reabre desde aqui.
+          const n = (this.androidSinSaludo.get(movil.serie) || 0) + 1;
+          this.androidSinSaludo.set(movil.serie, n);
+          if (n >= 10) {
+            this.androidSinSaludo.set(movil.serie, 0);
+            android.reabrirApp(movil.serie).then((hecho) => {
+              if (hecho) console.log(`[nexo] Android ${movil.serie}: Nexo Cam no contestaba, la reabro`);
+            });
+          }
+        });
         // Callada hasta que salude: adb acepta la conexion aunque Nexo Cam no
         // este abierta en el movil y la corta al momento, cada 2 s.
         this.#considerarSesion(ses, 'cable', id, { callada: true });
@@ -156,6 +171,20 @@ class Conexion extends EventEmitter {
   // conexion muda o ajena no ocupa el sitio de un iPhone de verdad.
   // Un Android enchufado que aun no ha aceptado este PC ("unauthorized") no
   // sirve de nada y no da ninguna pista: se dice una vez por movil.
+  // Si un Android que estaba no aparece en adb durante ~10 s seguidos, se
+  // reinicia el servidor de adb (cada 30 s como mucho mientras siga sin verse).
+  // Si el movil de verdad se ha desenchufado no hace dano; si era adb el que lo
+  // habia perdido (16/10/2026, dos veces), vuelve solo.
+  async #cuidarAndroid(androides) {
+    this.androidSinSaludo = this.androidSinSaludo || new Map();
+    if (androides.some((a) => a.listo)) { this.androidVisto = true; this.androidAusente = 0; return; }
+    if (!this.androidVisto) return; // en esta sesion nunca hubo Android: nada que reanimar
+    this.androidAusente = (this.androidAusente || 0) + 1;
+    if (this.androidAusente >= 5 && await android.reanimarAdb()) {
+      console.log('[nexo] el Android no aparece en adb: reinicio el servidor de adb');
+    }
+  }
+
   #avisarAndroidSinPermiso(androides) {
     this.androidAvisados = this.androidAvisados || new Set();
     for (const a of androides) {

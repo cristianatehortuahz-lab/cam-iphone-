@@ -84,4 +84,31 @@ async function conectar(serie, puertoMovil) {
   });
 }
 
-module.exports = { disponible, listarDispositivos, conectar, buscarAdb };
+// Reanimar adb. El 16/10/2026 el servidor de adb dejo de ver un movil que
+// Windows si tenia enchufado (con su "ADB Interface"), dos veces; `adb
+// kill-server` + `start-server` lo devolvio al momento. Lo arranca Nexo, asi que
+// vive lo que viva Nexo.
+let ultimaReanimacion = 0;
+async function reanimarAdb() {
+  if (!disponible() || Date.now() - ultimaReanimacion < 30000) return false;
+  ultimaReanimacion = Date.now();
+  await adb(['kill-server']).catch(() => {});
+  await adb(['start-server']).catch(() => {});
+  return true;
+}
+
+// Reabrir Nexo Cam en el movil: despertar la pantalla (la camara de Android no
+// da imagen con el movil bloqueado) y arrancar la app de cero (-S la cierra
+// antes). Para cuando el tunel se abre pero la app no saluda: el usuario veia
+// que "habia que quitar y volver a poner la depuracion" para que funcionara.
+const APP = 'com.nexo.camara/.MainActivity';
+const reaperturas = new Map(); // serie -> ultima vez
+async function reabrirApp(serie) {
+  if (Date.now() - (reaperturas.get(serie) || 0) < 60000) return false;
+  reaperturas.set(serie, Date.now());
+  await adb(['-s', serie, 'shell', 'input', 'keyevent', 'KEYCODE_WAKEUP']).catch(() => {});
+  await adb(['-s', serie, 'shell', 'am', 'start', '-S', '-n', APP]).catch(() => {});
+  return true;
+}
+
+module.exports = { disponible, listarDispositivos, conectar, buscarAdb, reanimarAdb, reabrirApp };
