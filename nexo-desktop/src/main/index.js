@@ -239,7 +239,7 @@ function iniciarCamaraVirtual() {
   const conf = ajustes.get('camaraVirtual');
   camaraVirtual = new CamaraVirtual({
     carpetaDatos: app.getPath('userData'),
-    opciones: { giro: conf.giro, espejo: conf.espejo, encuadre: conf.encuadre, dos: composicion(conf) },
+    opciones: { giro: conf.giro, espejo: conf.espejo, encuadre: conf.encuadre, dos: composicion(conf), lienzoFijo: Boolean(conf.lienzoFijo) },
   });
   camaraVirtual.on('estado', () => {
     if (bandeja) refrescarMenuBandeja();
@@ -252,7 +252,7 @@ function iniciarCamaraVirtual() {
 function ajustarCamaraVirtual(cambios) {
   const conf = { ...ajustes.get('camaraVirtual'), ...cambios };
   ajustes.set('camaraVirtual', conf);
-  camaraVirtual.configurar({ giro: conf.giro, espejo: conf.espejo, encuadre: conf.encuadre, dos: composicion(conf) });
+  camaraVirtual.configurar({ giro: conf.giro, espejo: conf.espejo, encuadre: conf.encuadre, dos: composicion(conf), lienzoFijo: Boolean(conf.lienzoFijo) });
   camaraVirtual.activar(conf.activa);
   if (bandeja) refrescarMenuBandeja();
   avisarDirecto();

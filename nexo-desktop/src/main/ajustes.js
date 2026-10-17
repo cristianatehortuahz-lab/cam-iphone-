@@ -22,7 +22,9 @@ const POR_DEFECTO = {
   // segundaAlMaximo: pedirle a la segunda camara su mejor resolucion al conectar
   // (el estudio solo gobierna la principal). Apagado por defecto: en un PC sin
   // tarjeta grafica, dos 4K a la vez no caben.
-  camaraVirtual: { activa: true, giro: 0, espejo: false, encuadre: null, dos: 'apilada', segundaAlMaximo: false },
+  // lienzoFijo: con 'apilada', 1080x1216 siempre, aunque falte la segunda camara
+  // (su franja en negro): asi un movil que se cae no rompe la imagen en TikTok.
+  camaraVirtual: { activa: true, giro: 0, espejo: false, encuadre: null, dos: 'apilada', segundaAlMaximo: false, lienzoFijo: false },
   // El micro del iPhone mezclado en el audio del directo (micro-iphone.js).
   // Apagado por defecto: tambien recoge la voz sin Auto-Tune. nivel en %.
   microIphone: { activo: false, nivel: 100 },

@@ -281,6 +281,22 @@ function planificarDos(principal, segunda, opciones = {}, gpu = {}) {
   };
 }
 
+// La principal sola, pero en el lienzo de la imagen apilada (1080x1216): en su
+// franja de arriba y negro el resto. Es para `lienzoFijo`: si un movil se cae en
+// pleno directo, la webcam no cambia de tamano. Al cambiar de tamano hay que
+// reiniciar el ayudante, y TikTok LIVE Studio se queda agarrado a la cola vieja
+// con la imagen rota hasta reiniciarlo (16/10/2026, el Android cayo por adb).
+function planificarSola(principal, opciones = {}, enGpu = false) {
+  const p = planificarDos(principal, principal, { ...opciones, dos: 'apilada' }, { uno: enGpu });
+  const { w, h, x, y } = p.uno;
+  return {
+    ancho: p.ancho,
+    alto: p.alto,
+    filtros: `${p.uno.filtros},pad=${p.ancho}:${p.alto}:${x}:${y}:black,format=nv12`,
+    w, h,
+  };
+}
+
 // Pega una imagen NV12 de w x h en un lienzo NV12 de W x H, en (x, y).
 function pegar(lienzo, W, H, img, w, h, x, y) {
   if (x === 0 && w === W) {
@@ -521,7 +537,7 @@ class CamaraVirtual extends EventEmitter {
   #firma() {
     const o = this.opciones;
     if (!this.origen) return null;
-    const una = `${this.origen.ancho}x${this.origen.alto}|${o.giro}|${o.espejo ? 1 : 0}|${o.encuadre || ''}|${this.gpu ? 'g' : 'c'}`;
+    const una = `${this.origen.ancho}x${this.origen.alto}|${o.giro}|${o.espejo ? 1 : 0}|${o.encuadre || ''}|${this.gpu ? 'g' : 'c'}|${o.lienzoFijo && o.dos === 'apilada' ? 'fijo' : ''}`;
     return this.#dos() ? `${una}|${o.dos}|${this.segunda.origen.ancho}x${this.segunda.origen.alto}` : una;
   }
 
@@ -605,7 +621,9 @@ class CamaraVirtual extends EventEmitter {
     const plan = this.#dos()
       ? planificarDos(this.origen, this.segunda.origen, this.opciones,
         { uno: this.#enGpu(this.origen), dos: this.#enGpu(this.segunda.origen) })
-      : planificar(this.origen, this.opciones, this.#enGpu(this.origen));
+      : this.opciones.lienzoFijo && this.opciones.dos === 'apilada'
+        ? planificarSola(this.origen, this.opciones, this.#enGpu(this.origen))
+        : planificar(this.origen, this.opciones, this.#enGpu(this.origen));
     const lienzo = `${plan.ancho}x${plan.alto}`;
 
     if (this.ayudante && this.ayudante.lienzo !== lienzo) {
@@ -869,4 +887,4 @@ class CamaraVirtual extends EventEmitter {
   }
 }
 
-module.exports = { CamaraVirtual, planificar, planificarDos, extraerSps, tamanoDeSps, ENCUADRES, COMPOSICIONES };
+module.exports = { CamaraVirtual, planificar, planificarDos, planificarSola, extraerSps, tamanoDeSps, ENCUADRES, COMPOSICIONES };
