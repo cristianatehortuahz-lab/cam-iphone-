@@ -76,9 +76,14 @@ a la carpeta de memoria de Claude de este proyecto; esta guia es solo el mapa.
   1 y 2 = los dos micros; su salida va a las dos interfaces). VoiceMeeter abierto
   ANTES que el DAW. Se maneja con `herramientas/voicemeeter.ps1`.
   `micro-windows.js` queda de reserva: llega al DAW ~55 ms tarde.
-  - Tras cambiar un bufer o reiniciar el motor de VoiceMeeter hay que REABRIR el
-    DAW: si no, entrega la mitad de las muestras y cruje (`comprobar-audio.js` lo
-    delata: ~25 000 muestras/s en vez de 44 100 o 48 000).
+  - Tras cambiar un bufer hay que REABRIR el DAW: si no, entrega la mitad de las
+    muestras y cruje (`comprobar-audio.js` lo delata: ~25 000 muestras/s en vez
+    de 44 100 o 48 000). Un reinicio del motor sin cambiar buferes no lo pide
+    (medido el 16/10/2026).
+  - El motor de VoiceMeeter se ha quedado mudo entero (ni micros ni retorno) dos
+    veces, con la interfaz asignada; `Command.Restart=1` lo revive. El 16/10/2026
+    coincidio con el iPhone conectandose y desconectandose por un concentrador
+    USB generico. Sin confirmar: moviles directos al PC, no por el hub.
   - El bufer de la principal se pone en el panel de su driver, no en VoiceMeeter.
     La AIR cruje de oido por debajo de 256 (probado 128, 144 y 192 el 10/10/2026).
   - Reaper se pasa solo al audio de Windows (`mode=1`) si un dia no pudo abrir su

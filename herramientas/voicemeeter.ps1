@@ -156,12 +156,19 @@ try {
       }
       Start-Sleep -Seconds 4
       Esperar
+      # Frecuencia 0 = la interfaz esta asignada pero su driver no arranco: el
+      # DAW no recibe nada. Paso el 16/10/2026 con el nombre ya puesto; se le
+      # dan unos segundos mas antes de darlo por fallido.
+      $f = 0.0
+      for ($k = 0; $k -lt 4 -and $f -le 0; $k++) {
+        if ($k) { Start-Sleep -Seconds 2; Esperar }
+        [VM]::VBVMR_GetParameterFloat('Bus[0].device.sr', [ref]$f) | Out-Null
+      }
       $s = New-Object Text.StringBuilder 512; [VM]::VBVMR_GetParameterStringA('Bus[0].device.name', $s) | Out-Null
       $s1 = New-Object Text.StringBuilder 512; [VM]::VBVMR_GetParameterStringA('Strip[1].device.name', $s1) | Out-Null
-      $f = 0.0; [VM]::VBVMR_GetParameterFloat('Bus[0].device.sr', [ref]$f) | Out-Null
       $b1 = 0.0; [VM]::VBVMR_GetParameterFloat('Strip[1].B1', [ref]$b1) | Out-Null
       $a2 = 0.0; [VM]::VBVMR_GetParameterFloat('Strip[3].A2', [ref]$a2) | Out-Null
-      $quedo = "$s" -eq $asio.Nombre -and $b1 -eq 1 -and $a2 -eq 1 -and ((-not $micro) -or "$s1" -eq $micro.Nombre)
+      $quedo = "$s" -eq $asio.Nombre -and $f -gt 0 -and $b1 -eq 1 -and $a2 -eq 1 -and ((-not $micro) -or "$s1" -eq $micro.Nombre)
       if (-not $quedo -and $vez -eq 1) { Write-Host '  no quedo montado a la primera: lo repito'; Start-Sleep -Seconds 3 }
     }
     Write-Host ("  principal: {0} a {1} Hz | segunda: {2}" -f $s, $f, $(if ($micro) { 'micro y auriculares por KS' } else { 'no esta' }))
