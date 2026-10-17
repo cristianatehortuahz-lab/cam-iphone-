@@ -44,9 +44,18 @@ try {
   if ([VigiaVM]::VBVMR_Login() -lt 0) { Anotar 'no pude conectar con VoiceMeeter'; return }
   Anotar 'vigia en marcha'
   $fin = if ($Segundos -gt 0) { (Get-Date).AddSeconds($Segundos) } else { [datetime]::MaxValue }
-  $mudo = 0; $reinicios = 0
-  while ((Get-Date) -lt $fin -and (Get-Process voicemeeterpro -ErrorAction SilentlyContinue)) {
+  $mudo = 0; $reinicios = 0; $sinVM = 0; $latido = Get-Date; $motivo = 'tiempo cumplido'
+  # El 16/10/2026 el vigia se cerro solo a los 17 s sin dejar dicho por que, y
+  # el motor se paro despues sin nadie que lo levantara. Ahora solo termina si
+  # VoiceMeeter lleva 30 s cerrado, y apunta el motivo.
+  while ((Get-Date) -lt $fin) {
     Start-Sleep -Seconds 1
+    if ([Diagnostics.Process]::GetProcessesByName('voicemeeterpro').Length -eq 0) {
+      if (++$sinVM -ge 30) { $motivo = 'VoiceMeeter cerrado'; break }
+      continue
+    }
+    $sinVM = 0
+    if (((Get-Date) - $latido).TotalMinutes -ge 10) { Anotar 'sigue vigilando'; $latido = Get-Date }
     [VigiaVM]::VBVMR_IsParametersDirty() | Out-Null
     $sr = 0.0; [VigiaVM]::VBVMR_GetParameterFloat('Bus[0].device.sr', [ref]$sr) | Out-Null
     # Entradas de las tiras 0 y 1 (los dos micros) y 3 (lo que vuelve del DAW).
@@ -69,7 +78,9 @@ try {
       Start-Sleep -Seconds 5
     }
   }
-  Anotar ("vigia termina ({0} reinicios)" -f $reinicios)
+  Anotar ("vigia termina: {0} ({1} reinicios)" -f $motivo, $reinicios)
+} catch {
+  Anotar ("vigia cae por un error: {0}" -f $_.Exception.Message)
 } finally {
   [VigiaVM]::VBVMR_Logout() | Out-Null
   $unico.ReleaseMutex()
